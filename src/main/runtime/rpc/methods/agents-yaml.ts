@@ -8,6 +8,7 @@ import {
   saveAgentYaml
 } from '../../../agents-yaml/registry'
 import { resolveAgentLaunch } from '../../../agents-yaml/runner'
+import { generateAgentFromAnswers } from '../../../agents-yaml/conversation'
 
 /**
  * Runtime RPC methods for YAML agents (Web/mobile entry point).
@@ -95,5 +96,29 @@ export const AGENTS_YAML_METHODS: RpcMethod[] = [
     name: 'agents-yaml.resolveLaunch',
     params: z.object({ name: z.string().min(1) }),
     handler: async (params) => resolveAgentLaunch(params.name)
+  }),
+  defineMethod({
+    name: 'agents-yaml.generateFromConversation',
+    params: z.object({
+      name: z.string(),
+      displayName: z.string(),
+      description: z.string(),
+      provider: AgentProviderSchema,
+      runtimeType: z.enum(['ade', 'harness']),
+      role: z.string(),
+      toolsMcp: z.array(z.string()),
+      toolsSkills: z.array(z.string()),
+      behavior: z.object({
+        askBeforeDestructive: z.boolean(),
+        maxTurns: z.number().int().positive()
+      })
+    }),
+    handler: async (params) => {
+      const result = generateAgentFromAnswers(params)
+      if (result.ok) {
+        return { ok: true as const, rawYaml: result.rawYaml }
+      }
+      return { ok: false as const, errors: result.errors }
+    }
   })
 ]

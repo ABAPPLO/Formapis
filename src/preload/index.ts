@@ -2297,7 +2297,19 @@ const api = {
       ipcRenderer.invoke('agents-yaml:save', name, rawYaml),
     remove: (name: string): Promise<void> => ipcRenderer.invoke('agents-yaml:remove', name),
     resolveLaunch: (name: string): Promise<{ payload: AgentLaunchPayload } | { error: string }> =>
-      ipcRenderer.invoke('agents-yaml:resolveLaunch', name)
+      ipcRenderer.invoke('agents-yaml:resolveLaunch', name),
+    generateFromConversation: (answers: {
+      name: string
+      displayName: string
+      description: string
+      provider: string
+      runtimeType: 'ade' | 'harness'
+      role: string
+      toolsMcp: string[]
+      toolsSkills: string[]
+      behavior: { askBeforeDestructive: boolean; maxTurns: number }
+    }): Promise<{ ok: true; rawYaml: string } | { ok: false; errors: string[] }> =>
+      ipcRenderer.invoke('agents-yaml:generateFromConversation', answers)
   },
 
   scenarios: {

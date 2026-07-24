@@ -7,6 +7,7 @@ import {
   Bot,
   CheckCircle2,
   Loader2,
+  MessageSquarePlus,
   Play,
   Plus,
   Save,
@@ -35,6 +36,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { AgentBuilderConversation } from './AgentBuilderConversation'
 import type { AgentYamlRecord } from '../../../../shared/agent-yaml'
 
 const PROVIDERS = [
@@ -151,6 +153,7 @@ export default function AgentsYamlPage(): React.JSX.Element {
   const [saving, setSaving] = useState(false)
   const [validation, setValidation] = useState<{ valid: boolean; errors: string[] } | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [builderOpen, setBuilderOpen] = useState(false)
   const draftRef = useRef(draft)
   draftRef.current = draft
 
@@ -294,10 +297,16 @@ export default function AgentsYamlPage(): React.JSX.Element {
         <span className="ml-2 text-sm text-muted-foreground">
           {agents.length} agent{agents.length === 1 ? '' : 's'}
         </span>
-        <Button variant="outline" size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-1.5 size-3.5" />
-          New
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setBuilderOpen(true)}>
+            <MessageSquarePlus className="mr-1.5 size-3.5" />
+            Build
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="mr-1.5 size-3.5" />
+            New
+          </Button>
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -398,6 +407,14 @@ export default function AgentsYamlPage(): React.JSX.Element {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={async (name) => {
+          await loadAgents()
+          await handleSelect(name)
+        }}
+      />
+      <AgentBuilderConversation
+        open={builderOpen}
+        onOpenChange={setBuilderOpen}
+        onGenerated={async (name) => {
           await loadAgents()
           await handleSelect(name)
         }}

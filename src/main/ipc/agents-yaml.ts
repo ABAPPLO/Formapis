@@ -8,6 +8,7 @@ import {
   saveAgentYaml
 } from '../agents-yaml/registry'
 import { resolveAgentLaunch, type AgentLaunchPayload } from '../agents-yaml/runner'
+import { generateAgentFromAnswers, type ConversationAnswers } from '../agents-yaml/conversation'
 
 /**
  * YAML agent IPC handlers.
@@ -70,6 +71,20 @@ export function registerAgentsYamlHandlers(): void {
     'agents-yaml:resolveLaunch',
     async (_event, name: string): Promise<{ payload: AgentLaunchPayload } | { error: string }> => {
       return resolveAgentLaunch(name)
+    }
+  )
+
+  ipcMain.handle(
+    'agents-yaml:generateFromConversation',
+    async (
+      _event,
+      answers: ConversationAnswers
+    ): Promise<{ ok: true; rawYaml: string } | { ok: false; errors: string[] }> => {
+      const result = generateAgentFromAnswers(answers)
+      if (result.ok) {
+        return { ok: true, rawYaml: result.rawYaml }
+      }
+      return { ok: false, errors: result.errors }
     }
   )
 }

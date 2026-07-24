@@ -2864,6 +2864,12 @@ function createAgentsYamlApi(): NonNullable<Partial<PreloadApi>['agentsYaml']> {
         'agents-yaml.resolveLaunch',
         { name },
         15_000
+      ),
+    generateFromConversation: (answers) =>
+      callRuntimeResult<{ ok: true; rawYaml: string } | { ok: false; errors: string[] }>(
+        'agents-yaml.generateFromConversation',
+        answers,
+        15_000
       )
   }
 }
