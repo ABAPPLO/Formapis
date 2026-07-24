@@ -86,7 +86,14 @@ import type {
 } from '../shared/shell-open-types'
 import type { SkillDiscoveryResult, SkillDiscoveryTarget } from '../shared/skills'
 import type { SkillFreshnessInventory } from '../shared/skill-freshness'
-import type { ResourceDiscoveryResult } from '../shared/resources'
+import type {
+  CanonicalMcpServerInput,
+  CanonicalStoreListing,
+  DistributeResult,
+  DistributionStatus,
+  ResourceDiscoveryResult,
+  ResourceKind
+} from '../shared/resources'
 import type {
   RuntimeBrowserDriverState,
   RuntimeMobileSessionTabMove,
@@ -2248,7 +2255,27 @@ const api = {
 
   resources: {
     discover: (cwd?: string | null): Promise<ResourceDiscoveryResult> =>
-      ipcRenderer.invoke('resources:discover', cwd ?? null)
+      ipcRenderer.invoke('resources:discover', cwd ?? null),
+    canonical: {
+      list: (): Promise<CanonicalStoreListing> => ipcRenderer.invoke('resources:canonical:list'),
+      createMcp: (input: CanonicalMcpServerInput): Promise<{ path: string }> =>
+        ipcRenderer.invoke('resources:canonical:createMcp', input),
+      createSkill: (name: string, description: string): Promise<{ path: string }> =>
+        ipcRenderer.invoke('resources:canonical:createSkill', name, description),
+      remove: (kind: ResourceKind, name: string): Promise<void> =>
+        ipcRenderer.invoke('resources:canonical:remove', kind, name)
+    },
+    distribute: (
+      kind: ResourceKind,
+      name: string,
+      options?: { agents?: string[]; preferCopy?: boolean }
+    ): Promise<DistributeResult> => ipcRenderer.invoke('resources:distribute', kind, name, options),
+    distribution: {
+      inspect: (kind: ResourceKind, name: string): Promise<DistributionStatus[]> =>
+        ipcRenderer.invoke('resources:distribution:inspect', kind, name),
+      remove: (kind: ResourceKind, name: string): Promise<DistributionStatus[]> =>
+        ipcRenderer.invoke('resources:distribution:remove', kind, name)
+    }
   },
 
   pet: {

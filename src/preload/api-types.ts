@@ -343,7 +343,14 @@ import type {
   ShellOpenLocalPathResult
 } from '../shared/shell-open-types'
 import type { SkillDiscoveryResult, SkillDiscoveryTarget } from '../shared/skills'
-import type { ResourceDiscoveryResult } from '../shared/resources'
+import type {
+  CanonicalMcpServerInput,
+  CanonicalStoreListing,
+  DistributeResult,
+  DistributionStatus,
+  ResourceDiscoveryResult,
+  ResourceKind
+} from '../shared/resources'
 import type { SkillFreshnessInventory } from '../shared/skill-freshness'
 import type {
   CrashReportBreadcrumbData,
@@ -2315,6 +2322,21 @@ export type PreloadApi = {
   }
   resources: {
     discover: (cwd?: string | null) => Promise<ResourceDiscoveryResult>
+    canonical: {
+      list: () => Promise<CanonicalStoreListing>
+      createMcp: (input: CanonicalMcpServerInput) => Promise<{ path: string }>
+      createSkill: (name: string, description: string) => Promise<{ path: string }>
+      remove: (kind: ResourceKind, name: string) => Promise<void>
+    }
+    distribute: (
+      kind: ResourceKind,
+      name: string,
+      options?: { agents?: string[]; preferCopy?: boolean }
+    ) => Promise<DistributeResult>
+    distribution: {
+      inspect: (kind: ResourceKind, name: string) => Promise<DistributionStatus[]>
+      remove: (kind: ResourceKind, name: string) => Promise<DistributionStatus[]>
+    }
   }
   pet: {
     import: () => Promise<CustomPet | null>

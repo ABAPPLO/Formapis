@@ -37,7 +37,14 @@ import type {
 } from '../../../shared/types'
 import type { SkillDiscoveryResult } from '../../../shared/skills'
 import type { SkillFreshnessInventory } from '../../../shared/skill-freshness'
-import type { ResourceDiscoveryResult } from '../../../shared/resources'
+import type {
+  CanonicalMcpServerInput,
+  CanonicalStoreListing,
+  DistributeResult,
+  DistributionStatus,
+  ResourceDiscoveryResult,
+  ResourceKind
+} from '../../../shared/resources'
 import type { SshConnectionState, SshTarget } from '../../../shared/ssh-types'
 import {
   getDefaultOnboardingState,
@@ -2788,7 +2795,48 @@ function createResourcesApi(): NonNullable<Partial<PreloadApi>['resources']> {
     // Why: browser clients reach the desktop runtime via RPC; cwd is resolved
     // server-side from the active worktree when not supplied.
     discover: (cwd) =>
-      callRuntimeResult<ResourceDiscoveryResult>('resources.discover', { cwd: cwd ?? null }, 15_000)
+      callRuntimeResult<ResourceDiscoveryResult>(
+        'resources.discover',
+        { cwd: cwd ?? null },
+        15_000
+      ),
+    canonical: {
+      list: () => callRuntimeResult<CanonicalStoreListing>('resources.canonical.list', {}, 15_000),
+      createMcp: (input: CanonicalMcpServerInput) =>
+        callRuntimeResult<{ path: string }>('resources.canonical.createMcp', input, 15_000),
+      createSkill: (name, description) =>
+        callRuntimeResult<{ path: string }>(
+          'resources.canonical.createSkill',
+          { name, description },
+          15_000
+        ),
+      remove: (kind: ResourceKind, name) =>
+        callRuntimeResult<{ ok: boolean }>(
+          'resources.canonical.remove',
+          { kind, name },
+          15_000
+        ).then(() => undefined)
+    },
+    distribute: (kind: ResourceKind, name, options) =>
+      callRuntimeResult<DistributeResult>(
+        'resources.distribute',
+        { kind, name, agents: options?.agents, preferCopy: options?.preferCopy },
+        30_000
+      ),
+    distribution: {
+      inspect: (kind: ResourceKind, name) =>
+        callRuntimeResult<DistributionStatus[]>(
+          'resources.distribution.inspect',
+          { kind, name },
+          15_000
+        ),
+      remove: (kind: ResourceKind, name) =>
+        callRuntimeResult<DistributionStatus[]>(
+          'resources.distribution.remove',
+          { kind, name },
+          15_000
+        )
+    }
   }
 }
 

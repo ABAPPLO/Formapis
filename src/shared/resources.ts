@@ -126,6 +126,63 @@ export type ResourceDiscoveryResult = {
 export const FORMAPIS_RESOURCES_DIR_NAME = '.formapis'
 export const FORMAPIS_RESOURCES_SUBDIR = 'resources'
 
+// ─── Canonical store + distribution (Phase 1b) ──────────────────────────────
+
+/**
+ * A resource definition living in the canonical Formapis store
+ * (~/.formapis/resources/<kind>/<name>/). These are the authoritative copies
+ * that get distributed (symlinked/copied) to each agent's own directory.
+ *
+ * For skills this is a directory with a SKILL.md; for MCP servers it is a JSON
+ * definition file (transport + command/url + env); for plugins a directory.
+ */
+export type CanonicalResource = {
+  kind: ResourceKind
+  name: string
+  description: string | null
+  /** Absolute path of the canonical resource on disk. */
+  canonicalPath: string
+  updatedAt: number
+}
+
+/** Per-agent distribution status for one canonical resource. */
+export type DistributionStatus = {
+  agent: AgentType
+  /** Where the resource lands in this agent's home (target path). */
+  targetPath: string
+  state: 'linked' | 'copied' | 'missing' | 'foreign' | 'unsupported'
+  /** Human-readable note, e.g. why a format is unsupported. */
+  note?: string
+}
+
+/** Result of distributing one canonical resource to all applicable agents. */
+export type DistributeResult = {
+  resource: { kind: ResourceKind; name: string }
+  statuses: DistributionStatus[]
+}
+
+export type CanonicalStoreListing = {
+  resources: CanonicalResource[]
+  scannedAt: number
+}
+
+/** Payload to create a canonical MCP server definition. */
+export type CanonicalMcpServerInput = {
+  name: string
+  description?: string
+  transport: 'stdio' | 'http'
+  /** stdio command (first arg) — for stdio transport. */
+  command?: string
+  /** stdio args — for stdio transport. */
+  args?: string[]
+  /** http/sse url — for http transport. */
+  url?: string
+  /** env vars (kept on the canonical store; surfaced masked to renderer). */
+  env?: Record<string, string>
+}
+
+// ─── Filter state ───────────────────────────────────────────────────────────
+
 /** Filter state for the ResourcesPage (mirrors SkillsFilterState). */
 export type ResourcesFilterState = {
   query: string

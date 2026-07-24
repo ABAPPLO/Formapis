@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Why: ResourcesPage is the single entry surface for both discovered (read-only) and canonical (managed + distributed) resources; splitting it would force the two views into separate nav entries and obscure the define-once-distribute flow. */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
@@ -5,10 +6,9 @@ import {
   Clock,
   FolderOpen,
   Loader2,
-  Plug,
+  Plus,
   RefreshCw,
-  Search,
-  Server
+  Search
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -27,23 +27,16 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import type {
+  CanonicalResource,
+  CanonicalStoreListing,
   DiscoveredResource,
   ResourceDiscoveryResult,
   ResourceKind,
   ResourceSourceKind
 } from '../../../../shared/resources'
-
-const kindLabels: Record<ResourceKind, string> = {
-  mcp: 'MCP',
-  skill: 'Skill',
-  plugin: 'Plugin'
-}
-
-const kindIcons: Record<ResourceKind, typeof Server> = {
-  mcp: Server,
-  skill: Blocks,
-  plugin: Plug
-}
+import { kindIcons, kindLabels } from './kind-meta'
+import { CanonicalResourceCard } from './CanonicalResourceCard'
+import { CreateCanonicalDialog } from './CreateCanonicalDialog'
 
 const sourceLabels: Record<ResourceSourceKind, string> = {
   canonical: 'Canonical',
@@ -235,6 +228,8 @@ export default function ResourcesPage(): React.JSX.Element {
   const closeResourcesPage = useAppStore((s) => s.closeResourcesPage)
   const mountedRef = useMountedRef()
   const [result, setResult] = useState<ResourceDiscoveryResult | null>(null)
+  const [canonical, setCanonical] = useState<CanonicalStoreListing | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [filters, setFilters] = useState<FilterState>({
     query: '',
@@ -242,12 +237,27 @@ export default function ResourcesPage(): React.JSX.Element {
     sourceKind: 'all'
   })
 
+  const loadCanonical = useCallback(async (): Promise<void> => {
+    try {
+      const next = await window.api.resources.canonical.list()
+      if (mountedRef.current) {
+        setCanonical(next)
+      }
+    } catch (error) {
+      console.error('Failed to list canonical resources:', error)
+    }
+  }, [mountedRef])
+
   const loadResources = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const next = await window.api.resources.discover()
+      const [next, canon] = await Promise.all([
+        window.api.resources.discover(),
+        window.api.resources.canonical.list()
+      ])
       if (mountedRef.current) {
         setResult(next)
+        setCanonical(canon)
       }
     } catch (error) {
       console.error('Failed to discover resources:', error)
@@ -289,6 +299,7 @@ export default function ResourcesPage(): React.JSX.Element {
 
   const resources = result?.resources ?? EMPTY_RESOURCES
   const visibleResources = useMemo(() => filterResources(resources, filters), [filters, resources])
+  const canonicalResources: CanonicalResource[] = canonical?.resources ?? []
   const counts = useMemo(() => {
     const byKind: Record<string, number> = { mcp: 0, skill: 0, plugin: 0 }
     for (const r of resources) {
@@ -312,6 +323,10 @@ export default function ResourcesPage(): React.JSX.Element {
           {pluralize(resources.length, 'resource')} · {pluralize(counts.mcp, 'MCP')} ·{' '}
           {pluralize(counts.skill, 'skill')} · {pluralize(counts.plugin, 'plugin')}
         </span>
+        <Button variant="outline" size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
+          <Plus className="mr-1.5 size-3.5" />
+          New canonical
+        </Button>
       </header>
 
       <section className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
@@ -363,19 +378,50 @@ export default function ResourcesPage(): React.JSX.Element {
 
       <section className="scrollbar-sleek flex-1 overflow-y-auto px-4 py-3">
         <div className="mx-auto flex max-w-5xl flex-col gap-3">
+          {canonicalResources.length > 0 ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Canonical ({canonicalResources.length})
+                <span className="text-muted-foreground/60 normal-case font-normal">
+                  · define once, distribute to agents
+                </span>
+              </div>
+              {canonicalResources.map((resource) => (
+                <CanonicalResourceCard
+                  key={`${resource.kind}:${resource.name}`}
+                  resource={resource}
+                  onChanged={() => void loadCanonical()}
+                />
+              ))}
+            </div>
+          ) : null}
+
           {visibleResources.length > 0 ? (
-            visibleResources.map((resource) => (
-              <ResourceCard key={resource.id} resource={resource} />
-            ))
-          ) : (
+            <>
+              {canonicalResources.length > 0 ? (
+                <div className="px-1 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Discovered ({visibleResources.length})
+                </div>
+              ) : null}
+              {visibleResources.map((resource) => (
+                <ResourceCard key={resource.id} resource={resource} />
+              ))}
+            </>
+          ) : canonicalResources.length === 0 ? (
             <EmptyState
               loading={loading}
               hasFilters={hasFilters}
               onRefresh={() => void loadResources()}
             />
-          )}
+          ) : null}
         </div>
       </section>
+
+      <CreateCanonicalDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={() => void loadResources()}
+      />
     </main>
   )
 }
