@@ -3198,6 +3198,7 @@ export type TopLevelView =
   | 'skills'
   | 'resources'
   | 'agents-yaml'
+  | 'task-board'
   | 'mobile'
 
 export type PersistedUIState = {

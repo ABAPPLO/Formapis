@@ -34,6 +34,7 @@ import { WORKSPACE_PORT_METHODS } from './workspace-ports'
 import { SKILL_METHODS } from './skills'
 import { RESOURCE_METHODS } from './resources'
 import { AGENTS_YAML_METHODS } from './agents-yaml'
+import { SCENARIOS_METHODS } from './scenarios'
 import { CLIPBOARD_METHODS } from './clipboard'
 import { HOST_CAPABILITY_METHODS } from './host-capabilities'
 import { EMULATOR_METHODS } from './emulator'
@@ -79,6 +80,7 @@ export const ALL_RPC_METHODS: readonly RpcAnyMethod[] = [
   ...SKILL_METHODS,
   ...RESOURCE_METHODS,
   ...AGENTS_YAML_METHODS,
+  ...SCENARIOS_METHODS,
   ...CLIPBOARD_METHODS,
   ...HOST_CAPABILITY_METHODS,
   ...CLIENT_EVENT_METHODS,

@@ -12,6 +12,7 @@ const TOP_LEVEL_VIEW_LOOKUP: Record<TopLevelView, true> = {
   skills: true,
   resources: true,
   'agents-yaml': true,
+  'task-board': true,
   mobile: true
 }
 

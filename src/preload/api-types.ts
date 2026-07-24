@@ -352,6 +352,7 @@ import type {
   ResourceKind
 } from '../shared/resources'
 import type { AgentLaunchPayload, AgentYamlRecord } from '../shared/agent-yaml'
+import type { ScenarioRecord } from '../shared/scenario-yaml'
 import type { SkillFreshnessInventory } from '../shared/skill-freshness'
 import type {
   CrashReportBreadcrumbData,
@@ -2355,6 +2356,32 @@ export type PreloadApi = {
     ) => Promise<{ record: AgentYamlRecord; valid: boolean; errors: string[] }>
     remove: (name: string) => Promise<void>
     resolveLaunch: (name: string) => Promise<{ payload: AgentLaunchPayload } | { error: string }>
+  }
+  scenarios: {
+    list: () => Promise<ScenarioRecord[]>
+    read: (name: string) => Promise<string | null>
+    create: (input: {
+      name: string
+      description?: string
+      mode?: 'orchestrated' | 'autonomous'
+      agentRefs: string[]
+      supervisor?: string
+      goal?: string
+    }) => Promise<ScenarioRecord>
+    save: (
+      name: string,
+      rawYaml: string
+    ) => Promise<{ record: ScenarioRecord; valid: boolean; errors: string[] }>
+    remove: (name: string) => Promise<void>
+    launch: (name: string) => Promise<
+      | {
+          ok: true
+          scenarioName: string
+          taskIds: { scenarioTaskId: string; engineTaskId: string; assignee: string }[]
+          mode: 'orchestrated' | 'autonomous'
+        }
+      | { ok: false; error: string }
+    >
   }
   pet: {
     import: () => Promise<CustomPet | null>

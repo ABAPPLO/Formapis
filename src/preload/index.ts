@@ -95,6 +95,7 @@ import type {
   ResourceKind
 } from '../shared/resources'
 import type { AgentLaunchPayload, AgentYamlRecord } from '../shared/agent-yaml'
+import type { ScenarioRecord } from '../shared/scenario-yaml'
 import type {
   RuntimeBrowserDriverState,
   RuntimeMobileSessionTabMove,
@@ -2297,6 +2298,26 @@ const api = {
     remove: (name: string): Promise<void> => ipcRenderer.invoke('agents-yaml:remove', name),
     resolveLaunch: (name: string): Promise<{ payload: AgentLaunchPayload } | { error: string }> =>
       ipcRenderer.invoke('agents-yaml:resolveLaunch', name)
+  },
+
+  scenarios: {
+    list: (): Promise<ScenarioRecord[]> => ipcRenderer.invoke('scenarios:list'),
+    read: (name: string): Promise<string | null> => ipcRenderer.invoke('scenarios:read', name),
+    create: (input: {
+      name: string
+      description?: string
+      mode?: 'orchestrated' | 'autonomous'
+      agentRefs: string[]
+      supervisor?: string
+      goal?: string
+    }): Promise<ScenarioRecord> => ipcRenderer.invoke('scenarios:create', input),
+    save: (
+      name: string,
+      rawYaml: string
+    ): Promise<{ record: ScenarioRecord; valid: boolean; errors: string[] }> =>
+      ipcRenderer.invoke('scenarios:save', name, rawYaml),
+    remove: (name: string): Promise<void> => ipcRenderer.invoke('scenarios:remove', name),
+    launch: (name: string) => ipcRenderer.invoke('scenarios:launch', name)
   },
 
   pet: {

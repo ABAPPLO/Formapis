@@ -320,6 +320,7 @@ const Settings = lazy(() => import('./components/settings/Settings'))
 const SkillsPage = lazy(() => import('./components/skills/SkillsPage'))
 const ResourcesPage = lazy(() => import('./components/resources/ResourcesPage'))
 const AgentsYamlPage = lazy(() => import('./components/agents-yaml/AgentsYamlPage'))
+const TaskBoardPage = lazy(() => import('./components/task-board/TaskBoardPage'))
 const WorkspaceSpacePage = lazy(() => import('./components/workspace-space/WorkspaceSpacePage'))
 const MobilePage = lazy(() => import('./components/mobile/MobilePage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
@@ -2255,6 +2256,7 @@ function App(): React.JSX.Element {
                               {activeView === 'skills' ? <SkillsPage /> : null}
                               {activeView === 'resources' ? <ResourcesPage /> : null}
                               {activeView === 'agents-yaml' ? <AgentsYamlPage /> : null}
+                              {activeView === 'task-board' ? <TaskBoardPage /> : null}
                               {activeView === 'tasks' ? <TaskPage /> : null}
                               {activeView === 'automations' ? <AutomationsPage /> : null}
                               {activeView === 'activity' ? <ActivityPrototypePage /> : null}

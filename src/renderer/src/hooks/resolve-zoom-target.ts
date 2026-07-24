@@ -13,6 +13,7 @@ export function resolveZoomTarget(args: {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator'
   activeElement: unknown

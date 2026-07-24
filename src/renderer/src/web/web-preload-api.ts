@@ -46,6 +46,7 @@ import type {
   ResourceKind
 } from '../../../shared/resources'
 import type { AgentLaunchPayload, AgentYamlRecord } from '../../../shared/agent-yaml'
+import type { ScenarioRecord } from '../../../shared/scenario-yaml'
 import type { SshConnectionState, SshTarget } from '../../../shared/ssh-types'
 import {
   getDefaultOnboardingState,
@@ -792,6 +793,7 @@ function createWebPreloadApi(): Partial<PreloadApi> {
     skills: createSkillsApi(),
     resources: createResourcesApi(),
     agentsYaml: createAgentsYamlApi(),
+    scenarios: createScenariosApi(),
     pty: createPtyApi(),
     ssh: createSshApi(),
     wsl: {
@@ -2863,6 +2865,25 @@ function createAgentsYamlApi(): NonNullable<Partial<PreloadApi>['agentsYaml']> {
         { name },
         15_000
       )
+  }
+}
+
+function createScenariosApi(): NonNullable<Partial<PreloadApi>['scenarios']> {
+  return {
+    list: () => callRuntimeResult<ScenarioRecord[]>('scenarios.list', {}, 15_000),
+    read: (name) => callRuntimeResult<string | null>('scenarios.read', { name }, 15_000),
+    create: (input) => callRuntimeResult<ScenarioRecord>('scenarios.create', input, 15_000),
+    save: (name, rawYaml) =>
+      callRuntimeResult<{ record: ScenarioRecord; valid: boolean; errors: string[] }>(
+        'scenarios.save',
+        { name, rawYaml },
+        15_000
+      ),
+    remove: (name) =>
+      callRuntimeResult<{ ok: boolean }>('scenarios.remove', { name }, 15_000).then(
+        () => undefined
+      ),
+    launch: (name) => callRuntimeResult('scenarios.launch', { name }, 30_000)
   }
 }
 

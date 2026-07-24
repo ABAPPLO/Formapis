@@ -612,6 +612,7 @@ export type UISlice = {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeSettings:
     | 'terminal'
@@ -622,6 +623,7 @@ export type UISlice = {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeActivity:
     | 'terminal'
@@ -632,6 +634,7 @@ export type UISlice = {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeAutomations:
     | 'terminal'
@@ -642,6 +645,7 @@ export type UISlice = {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeSpace:
     | 'terminal'
@@ -652,6 +656,7 @@ export type UISlice = {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeSkills:
     | 'terminal'
@@ -662,6 +667,7 @@ export type UISlice = {
     | 'space'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeResources:
     | 'terminal'
@@ -672,6 +678,7 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'agents-yaml'
+    | 'task-board'
     | 'mobile'
   previousViewBeforeAgentsYaml:
     | 'terminal'
@@ -682,6 +689,18 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'task-board'
+    | 'mobile'
+  previousViewBeforeTaskBoard:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeMobile:
     | 'terminal'
@@ -693,6 +712,7 @@ export type UISlice = {
     | 'skills'
     | 'resources'
     | 'agents-yaml'
+    | 'task-board'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -771,6 +791,8 @@ export type UISlice = {
   closeResourcesPage: () => void
   openAgentsYamlPage: () => void
   closeAgentsYamlPage: () => void
+  openTaskBoardPage: () => void
+  closeTaskBoardPage: () => void
   openMobilePage: () => void
   closeMobilePage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
@@ -1254,6 +1276,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeResources: 'terminal',
   previousViewBeforeAgentsYaml: 'terminal',
+  previousViewBeforeTaskBoard: 'terminal',
   previousViewBeforeMobile: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
@@ -1519,6 +1542,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeAgentsYamlPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeAgentsYaml
+    })),
+  openTaskBoardPage: () =>
+    set((state) => ({
+      activeView: 'task-board',
+      previousViewBeforeTaskBoard:
+        state.activeView === 'task-board' ? state.previousViewBeforeTaskBoard : state.activeView
+    })),
+  closeTaskBoardPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeTaskBoard
     })),
   openMobilePage: () =>
     set((state) => ({

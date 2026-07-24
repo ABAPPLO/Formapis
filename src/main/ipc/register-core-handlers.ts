@@ -40,6 +40,7 @@ import { registerSettingsHandlers } from './settings'
 import { registerDiagnosticsHandlers } from './diagnostics'
 import { registerAgentsYamlHandlers } from './agents-yaml'
 import { registerResourcesHandlers } from './resources'
+import { registerScenariosHandlers } from './scenarios'
 import { registerSkillsHandlers } from './skills'
 import { registerWorkspaceSpaceHandlers } from './workspace-space'
 import { registerWorkspacePortHandlers } from './workspace-ports'
@@ -173,6 +174,7 @@ export function registerCoreHandlers(
   registerSkillsHandlers(store)
   registerResourcesHandlers()
   registerAgentsYamlHandlers()
+  registerScenariosHandlers(() => runtime.getOrchestrationDb())
   if (automations) {
     registerAutomationHandlers(store, automations)
   }
