@@ -32,6 +32,7 @@ import { CLIENT_UI_METHODS } from './client-ui'
 import { CLIENT_EVENT_METHODS } from './client-events'
 import { WORKSPACE_PORT_METHODS } from './workspace-ports'
 import { SKILL_METHODS } from './skills'
+import { RESOURCE_METHODS } from './resources'
 import { CLIPBOARD_METHODS } from './clipboard'
 import { HOST_CAPABILITY_METHODS } from './host-capabilities'
 import { EMULATOR_METHODS } from './emulator'
@@ -75,6 +76,7 @@ export const ALL_RPC_METHODS: readonly RpcAnyMethod[] = [
   ...SPEECH_METHODS,
   ...WORKSPACE_PORT_METHODS,
   ...SKILL_METHODS,
+  ...RESOURCE_METHODS,
   ...CLIPBOARD_METHODS,
   ...HOST_CAPABILITY_METHODS,
   ...CLIENT_EVENT_METHODS,

@@ -38,6 +38,7 @@ import { setTrustedBrowserRendererWebContentsId, setAgentBrowserBridgeRef } from
 import { registerSessionHandlers } from './session'
 import { registerSettingsHandlers } from './settings'
 import { registerDiagnosticsHandlers } from './diagnostics'
+import { registerResourcesHandlers } from './resources'
 import { registerSkillsHandlers } from './skills'
 import { registerWorkspaceSpaceHandlers } from './workspace-space'
 import { registerWorkspacePortHandlers } from './workspace-ports'
@@ -169,6 +170,7 @@ export function registerCoreHandlers(
   registerComputerUsePermissionHandlers()
   registerSettingsHandlers(store, agentAwakeService)
   registerSkillsHandlers(store)
+  registerResourcesHandlers()
   if (automations) {
     registerAutomationHandlers(store, automations)
   }

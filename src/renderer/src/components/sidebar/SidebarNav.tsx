@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   Bell,
+  Blocks,
   CalendarClock,
   EyeOff,
   LayoutDashboard,
@@ -131,6 +132,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openAutomationsPage = useAppStore((s) => s.openAutomationsPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openMobilePage = useAppStore((s) => s.openMobilePage)
+  const openResourcesPage = useAppStore((s) => s.openResourcesPage)
   const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const activeView = useAppStore((s) => s.activeView)
@@ -141,6 +143,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const automationsActive = activeView === 'automations'
   const activityActive = activeView === 'activity'
   const mobileActive = activeView === 'mobile'
+  const resourcesActive = activeView === 'resources'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
   const mobileOnboardingBadge = useMobileSidebarOnboardingBadge(showMobileButton)
   const hideAutomationsButton = React.useCallback(() => {
@@ -289,6 +292,26 @@ const SidebarNav = React.memo(function SidebarNav() {
           <HideSidebarMenu onHide={hideMobileButton} />
         </ContextMenu>
       ) : null}
+      <button
+        type="button"
+        onClick={openResourcesPage}
+        aria-current={resourcesActive ? 'page' : undefined}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
+          resourcesActive
+            ? 'bg-worktree-sidebar-accent text-worktree-sidebar-accent-foreground'
+            : 'text-worktree-sidebar-foreground/60 hover:bg-worktree-sidebar-foreground/8'
+        )}
+      >
+        <Blocks
+          className={cn(
+            'size-4 shrink-0',
+            !resourcesActive && 'text-worktree-sidebar-foreground/30'
+          )}
+          strokeWidth={resourcesActive ? 2.25 : 1.75}
+        />
+        <span className="flex-1">Resources</span>
+      </button>
       <button
         type="button"
         onClick={() => openModal('worktree-palette')}

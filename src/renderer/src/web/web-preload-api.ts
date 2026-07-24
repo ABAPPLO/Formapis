@@ -37,6 +37,7 @@ import type {
 } from '../../../shared/types'
 import type { SkillDiscoveryResult } from '../../../shared/skills'
 import type { SkillFreshnessInventory } from '../../../shared/skill-freshness'
+import type { ResourceDiscoveryResult } from '../../../shared/resources'
 import type { SshConnectionState, SshTarget } from '../../../shared/ssh-types'
 import {
   getDefaultOnboardingState,
@@ -781,6 +782,7 @@ function createWebPreloadApi(): Partial<PreloadApi> {
     updater: createUpdaterApi(),
     shell: createShellApi(),
     skills: createSkillsApi(),
+    resources: createResourcesApi(),
     pty: createPtyApi(),
     ssh: createSshApi(),
     wsl: {
@@ -2778,6 +2780,15 @@ function createSkillsApi(): NonNullable<Partial<PreloadApi>['skills']> {
         eligibleUpdateNames: [],
         scannedAt: Date.now()
       })
+  }
+}
+
+function createResourcesApi(): NonNullable<Partial<PreloadApi>['resources']> {
+  return {
+    // Why: browser clients reach the desktop runtime via RPC; cwd is resolved
+    // server-side from the active worktree when not supplied.
+    discover: (cwd) =>
+      callRuntimeResult<ResourceDiscoveryResult>('resources.discover', { cwd: cwd ?? null }, 15_000)
   }
 }
 

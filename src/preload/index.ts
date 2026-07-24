@@ -86,6 +86,7 @@ import type {
 } from '../shared/shell-open-types'
 import type { SkillDiscoveryResult, SkillDiscoveryTarget } from '../shared/skills'
 import type { SkillFreshnessInventory } from '../shared/skill-freshness'
+import type { ResourceDiscoveryResult } from '../shared/resources'
 import type {
   RuntimeBrowserDriverState,
   RuntimeMobileSessionTabMove,
@@ -2243,6 +2244,11 @@ const api = {
       ipcRenderer.invoke('skills:discover', target),
     freshnessInventory: (): Promise<SkillFreshnessInventory> =>
       ipcRenderer.invoke('skills:freshnessInventory')
+  },
+
+  resources: {
+    discover: (cwd?: string | null): Promise<ResourceDiscoveryResult> =>
+      ipcRenderer.invoke('resources:discover', cwd ?? null)
   },
 
   pet: {

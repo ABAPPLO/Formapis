@@ -11,6 +11,7 @@ export function resolveZoomTarget(args: {
     | 'automations'
     | 'space'
     | 'skills'
+    | 'resources'
     | 'mobile'
   activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator'
   activeElement: unknown

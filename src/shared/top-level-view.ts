@@ -10,6 +10,7 @@ const TOP_LEVEL_VIEW_LOOKUP: Record<TopLevelView, true> = {
   automations: true,
   space: true,
   skills: true,
+  resources: true,
   mobile: true
 }
 
