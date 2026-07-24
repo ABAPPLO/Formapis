@@ -94,6 +94,7 @@ import type {
   ResourceDiscoveryResult,
   ResourceKind
 } from '../shared/resources'
+import type { AgentLaunchPayload, AgentYamlRecord } from '../shared/agent-yaml'
 import type {
   RuntimeBrowserDriverState,
   RuntimeMobileSessionTabMove,
@@ -2276,6 +2277,26 @@ const api = {
       remove: (kind: ResourceKind, name: string): Promise<DistributionStatus[]> =>
         ipcRenderer.invoke('resources:distribution:remove', kind, name)
     }
+  },
+
+  agentsYaml: {
+    list: (): Promise<AgentYamlRecord[]> => ipcRenderer.invoke('agents-yaml:list'),
+    read: (name: string): Promise<string | null> => ipcRenderer.invoke('agents-yaml:read', name),
+    create: (input: {
+      name: string
+      displayName?: string
+      description?: string
+      provider: string
+      role: string
+    }): Promise<AgentYamlRecord> => ipcRenderer.invoke('agents-yaml:create', input),
+    save: (
+      name: string,
+      rawYaml: string
+    ): Promise<{ record: AgentYamlRecord; valid: boolean; errors: string[] }> =>
+      ipcRenderer.invoke('agents-yaml:save', name, rawYaml),
+    remove: (name: string): Promise<void> => ipcRenderer.invoke('agents-yaml:remove', name),
+    resolveLaunch: (name: string): Promise<{ payload: AgentLaunchPayload } | { error: string }> =>
+      ipcRenderer.invoke('agents-yaml:resolveLaunch', name)
   },
 
   pet: {

@@ -2,6 +2,7 @@ import React from 'react'
 import {
   Bell,
   Blocks,
+  Bot,
   CalendarClock,
   EyeOff,
   LayoutDashboard,
@@ -133,6 +134,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openMobilePage = useAppStore((s) => s.openMobilePage)
   const openResourcesPage = useAppStore((s) => s.openResourcesPage)
+  const openAgentsYamlPage = useAppStore((s) => s.openAgentsYamlPage)
   const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const activeView = useAppStore((s) => s.activeView)
@@ -144,6 +146,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const activityActive = activeView === 'activity'
   const mobileActive = activeView === 'mobile'
   const resourcesActive = activeView === 'resources'
+  const agentsYamlActive = activeView === 'agents-yaml'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
   const mobileOnboardingBadge = useMobileSidebarOnboardingBadge(showMobileButton)
   const hideAutomationsButton = React.useCallback(() => {
@@ -311,6 +314,26 @@ const SidebarNav = React.memo(function SidebarNav() {
           strokeWidth={resourcesActive ? 2.25 : 1.75}
         />
         <span className="flex-1">Resources</span>
+      </button>
+      <button
+        type="button"
+        onClick={openAgentsYamlPage}
+        aria-current={agentsYamlActive ? 'page' : undefined}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
+          agentsYamlActive
+            ? 'bg-worktree-sidebar-accent text-worktree-sidebar-accent-foreground'
+            : 'text-worktree-sidebar-foreground/60 hover:bg-worktree-sidebar-foreground/8'
+        )}
+      >
+        <Bot
+          className={cn(
+            'size-4 shrink-0',
+            !agentsYamlActive && 'text-worktree-sidebar-foreground/30'
+          )}
+          strokeWidth={agentsYamlActive ? 2.25 : 1.75}
+        />
+        <span className="flex-1">Agents</span>
       </button>
       <button
         type="button"

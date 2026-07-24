@@ -45,6 +45,7 @@ import type {
   ResourceDiscoveryResult,
   ResourceKind
 } from '../../../shared/resources'
+import type { AgentLaunchPayload, AgentYamlRecord } from '../../../shared/agent-yaml'
 import type { SshConnectionState, SshTarget } from '../../../shared/ssh-types'
 import {
   getDefaultOnboardingState,
@@ -790,6 +791,7 @@ function createWebPreloadApi(): Partial<PreloadApi> {
     shell: createShellApi(),
     skills: createSkillsApi(),
     resources: createResourcesApi(),
+    agentsYaml: createAgentsYamlApi(),
     pty: createPtyApi(),
     ssh: createSshApi(),
     wsl: {
@@ -2837,6 +2839,30 @@ function createResourcesApi(): NonNullable<Partial<PreloadApi>['resources']> {
           15_000
         )
     }
+  }
+}
+
+function createAgentsYamlApi(): NonNullable<Partial<PreloadApi>['agentsYaml']> {
+  return {
+    list: () => callRuntimeResult<AgentYamlRecord[]>('agents-yaml.list', {}, 15_000),
+    read: (name) => callRuntimeResult<string | null>('agents-yaml.read', { name }, 15_000),
+    create: (input) => callRuntimeResult<AgentYamlRecord>('agents-yaml.create', input, 15_000),
+    save: (name, rawYaml) =>
+      callRuntimeResult<{ record: AgentYamlRecord; valid: boolean; errors: string[] }>(
+        'agents-yaml.save',
+        { name, rawYaml },
+        15_000
+      ),
+    remove: (name) =>
+      callRuntimeResult<{ ok: boolean }>('agents-yaml.remove', { name }, 15_000).then(
+        () => undefined
+      ),
+    resolveLaunch: (name) =>
+      callRuntimeResult<{ payload: AgentLaunchPayload } | { error: string }>(
+        'agents-yaml.resolveLaunch',
+        { name },
+        15_000
+      )
   }
 }
 

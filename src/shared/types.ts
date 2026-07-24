@@ -3197,6 +3197,7 @@ export type TopLevelView =
   | 'space'
   | 'skills'
   | 'resources'
+  | 'agents-yaml'
   | 'mobile'
 
 export type PersistedUIState = {

@@ -611,6 +611,7 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeSettings:
     | 'terminal'
@@ -620,6 +621,7 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeActivity:
     | 'terminal'
@@ -629,6 +631,7 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeAutomations:
     | 'terminal'
@@ -638,6 +641,7 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeSpace:
     | 'terminal'
@@ -647,6 +651,7 @@ export type UISlice = {
     | 'automations'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeSkills:
     | 'terminal'
@@ -656,6 +661,7 @@ export type UISlice = {
     | 'automations'
     | 'space'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   previousViewBeforeResources:
     | 'terminal'
@@ -665,6 +671,17 @@ export type UISlice = {
     | 'automations'
     | 'space'
     | 'skills'
+    | 'agents-yaml'
+    | 'mobile'
+  previousViewBeforeAgentsYaml:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'automations'
+    | 'space'
+    | 'skills'
+    | 'resources'
     | 'mobile'
   previousViewBeforeMobile:
     | 'terminal'
@@ -675,6 +692,7 @@ export type UISlice = {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -751,6 +769,8 @@ export type UISlice = {
   closeSkillsPage: () => void
   openResourcesPage: () => void
   closeResourcesPage: () => void
+  openAgentsYamlPage: () => void
+  closeAgentsYamlPage: () => void
   openMobilePage: () => void
   closeMobilePage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
@@ -1233,6 +1253,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeSpace: 'terminal',
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeResources: 'terminal',
+  previousViewBeforeAgentsYaml: 'terminal',
   previousViewBeforeMobile: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
@@ -1488,6 +1509,16 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeResourcesPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeResources
+    })),
+  openAgentsYamlPage: () =>
+    set((state) => ({
+      activeView: 'agents-yaml',
+      previousViewBeforeAgentsYaml:
+        state.activeView === 'agents-yaml' ? state.previousViewBeforeAgentsYaml : state.activeView
+    })),
+  closeAgentsYamlPage: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeAgentsYaml
     })),
   openMobilePage: () =>
     set((state) => ({

@@ -12,6 +12,7 @@ export function resolveZoomTarget(args: {
     | 'space'
     | 'skills'
     | 'resources'
+    | 'agents-yaml'
     | 'mobile'
   activeTabType: 'terminal' | 'editor' | 'browser' | 'simulator'
   activeElement: unknown

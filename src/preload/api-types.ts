@@ -351,6 +351,7 @@ import type {
   ResourceDiscoveryResult,
   ResourceKind
 } from '../shared/resources'
+import type { AgentLaunchPayload, AgentYamlRecord } from '../shared/agent-yaml'
 import type { SkillFreshnessInventory } from '../shared/skill-freshness'
 import type {
   CrashReportBreadcrumbData,
@@ -2337,6 +2338,23 @@ export type PreloadApi = {
       inspect: (kind: ResourceKind, name: string) => Promise<DistributionStatus[]>
       remove: (kind: ResourceKind, name: string) => Promise<DistributionStatus[]>
     }
+  }
+  agentsYaml: {
+    list: () => Promise<AgentYamlRecord[]>
+    read: (name: string) => Promise<string | null>
+    create: (input: {
+      name: string
+      displayName?: string
+      description?: string
+      provider: string
+      role: string
+    }) => Promise<AgentYamlRecord>
+    save: (
+      name: string,
+      rawYaml: string
+    ) => Promise<{ record: AgentYamlRecord; valid: boolean; errors: string[] }>
+    remove: (name: string) => Promise<void>
+    resolveLaunch: (name: string) => Promise<{ payload: AgentLaunchPayload } | { error: string }>
   }
   pet: {
     import: () => Promise<CustomPet | null>
