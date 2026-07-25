@@ -9,6 +9,7 @@ import {
 } from '../agents-yaml/registry'
 import { resolveAgentLaunch, type AgentLaunchPayload } from '../agents-yaml/runner'
 import { generateAgentFromAnswers, type ConversationAnswers } from '../agents-yaml/conversation'
+import { generateAnswersFromDescription } from '../agents-yaml/openai-answers-client'
 
 /**
  * YAML agent IPC handlers.
@@ -85,6 +86,16 @@ export function registerAgentsYamlHandlers(): void {
         return { ok: true, rawYaml: result.rawYaml }
       }
       return { ok: false, errors: result.errors }
+    }
+  )
+
+  ipcMain.handle(
+    'agents-yaml:generateFromDescription',
+    async (
+      _event,
+      description: string
+    ): Promise<{ ok: true; answers: ConversationAnswers } | { ok: false; error: string }> => {
+      return generateAnswersFromDescription(description)
     }
   )
 }

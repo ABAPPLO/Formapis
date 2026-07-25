@@ -9,6 +9,7 @@ import {
 } from '../../../agents-yaml/registry'
 import { resolveAgentLaunch } from '../../../agents-yaml/runner'
 import { generateAgentFromAnswers } from '../../../agents-yaml/conversation'
+import { generateAnswersFromDescription } from '../../../agents-yaml/openai-answers-client'
 
 /**
  * Runtime RPC methods for YAML agents (Web/mobile entry point).
@@ -120,5 +121,10 @@ export const AGENTS_YAML_METHODS: RpcMethod[] = [
       }
       return { ok: false as const, errors: result.errors }
     }
+  }),
+  defineMethod({
+    name: 'agents-yaml.generateFromDescription',
+    params: z.object({ description: z.string().min(1) }),
+    handler: async (params) => generateAnswersFromDescription(params.description)
   })
 ]

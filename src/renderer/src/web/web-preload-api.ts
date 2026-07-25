@@ -2870,7 +2870,25 @@ function createAgentsYamlApi(): NonNullable<Partial<PreloadApi>['agentsYaml']> {
         'agents-yaml.generateFromConversation',
         answers,
         15_000
-      )
+      ),
+    generateFromDescription: (description) =>
+      callRuntimeResult<
+        | {
+            ok: true
+            answers: {
+              name: string
+              displayName: string
+              description: string
+              provider: string
+              runtimeType: 'ade' | 'harness'
+              role: string
+              toolsMcp: string[]
+              toolsSkills: string[]
+              behavior: { askBeforeDestructive: boolean; maxTurns: number }
+            }
+          }
+        | { ok: false; error: string }
+      >('agents-yaml.generateFromDescription', { description }, 35_000)
   }
 }
 

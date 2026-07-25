@@ -1,6 +1,15 @@
 /* eslint-disable max-lines -- Why: AgentBuilderConversation is a multi-step wizard with live YAML preview; splitting the steps from the preview would break the iterate-and-watch loop. */
 import { useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, Loader2, MessageSquarePlus, Save } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  Check,
+  Loader2,
+  MessageSquarePlus,
+  Save,
+  Sparkles
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -84,11 +93,47 @@ export function AgentBuilderConversation({
   const [generatedYaml, setGeneratedYaml] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [aiDescription, setAiDescription] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
 
   const reset = (): void => {
     setStepIndex(0)
     setAnswers(INITIAL_ANSWERS)
     setGeneratedYaml(null)
+    setAiDescription('')
+  }
+
+  const handleAiGenerate = async (): Promise<void> => {
+    if (!aiDescription.trim()) {
+      toast.error('Describe the agent first')
+      return
+    }
+    setAiLoading(true)
+    try {
+      const result = await window.api.agentsYaml.generateFromDescription(aiDescription)
+      if (!result.ok) {
+        toast.error('AI generation failed', { description: result.error })
+        return
+      }
+      const a = result.answers
+      setAnswers({
+        name: a.name,
+        displayName: a.displayName,
+        description: a.description,
+        provider: a.provider,
+        runtimeType: a.runtimeType,
+        role: a.role,
+        toolsText: [...a.toolsMcp, ...a.toolsSkills].join(', '),
+        askBeforeDestructive: a.behavior.askBeforeDestructive,
+        maxTurns: a.behavior.maxTurns
+      })
+      setStepIndex(STEPS.length - 1)
+      toast.success('AI draft filled in — review and generate')
+    } catch (error) {
+      toast.error('AI generation failed', { description: String(error) })
+    } finally {
+      setAiLoading(false)
+    }
   }
 
   const close = (): void => {
@@ -199,6 +244,36 @@ export function AgentBuilderConversation({
             Answer a few questions; we&apos;ll assemble a valid YAML agent you can refine.
           </DialogDescription>
         </DialogHeader>
+
+        {/* AI describe (optional fast path) */}
+        <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
+          <Label htmlFor="ai-desc" className="flex items-center gap-1.5 text-xs font-medium">
+            <Sparkles className="size-3.5 text-primary" />
+            Describe the agent in your own words (optional)
+          </Label>
+          <textarea
+            id="ai-desc"
+            value={aiDescription}
+            onChange={(e) => setAiDescription(e.target.value)}
+            placeholder="e.g. A security-focused code reviewer that checks for vulnerabilities, injection risks, and unsafe patterns in PRs. Uses claude."
+            rows={2}
+            className="mt-1.5 flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2"
+            onClick={() => void handleAiGenerate()}
+            disabled={aiLoading || !aiDescription.trim()}
+          >
+            {aiLoading ? (
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1.5 size-3.5" />
+            )}
+            {aiLoading ? 'Generating…' : 'Auto-fill with AI'}
+          </Button>
+        </div>
 
         {/* Step indicator */}
         <div className="flex items-center gap-1 px-1">

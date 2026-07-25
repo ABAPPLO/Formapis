@@ -2309,7 +2309,26 @@ const api = {
       toolsSkills: string[]
       behavior: { askBeforeDestructive: boolean; maxTurns: number }
     }): Promise<{ ok: true; rawYaml: string } | { ok: false; errors: string[] }> =>
-      ipcRenderer.invoke('agents-yaml:generateFromConversation', answers)
+      ipcRenderer.invoke('agents-yaml:generateFromConversation', answers),
+    generateFromDescription: (
+      description: string
+    ): Promise<
+      | {
+          ok: true
+          answers: {
+            name: string
+            displayName: string
+            description: string
+            provider: string
+            runtimeType: 'ade' | 'harness'
+            role: string
+            toolsMcp: string[]
+            toolsSkills: string[]
+            behavior: { askBeforeDestructive: boolean; maxTurns: number }
+          }
+        }
+      | { ok: false; error: string }
+    > => ipcRenderer.invoke('agents-yaml:generateFromDescription', description)
   },
 
   scenarios: {
