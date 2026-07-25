@@ -13371,6 +13371,20 @@ export class OrcaRuntimeService {
     return this.getPaneKeyForTerminalHandle(handle)
   }
 
+  /**
+   * Returns the agent type currently associated with a terminal handle, so the
+   * orchestration coordinator can route tasks to terminals running the declared
+   * agent. Prefers the launch-time declared agent; falls back to the foreground
+   * agent the terminal reported via hooks.
+   */
+  getTerminalAgentType(handle: string): string | null {
+    const live = this.getLivePtyForHandle(handle)
+    if (!live) {
+      return null
+    }
+    return live.pty.launchAgent ?? live.pty.foregroundAgent ?? null
+  }
+
   resolveTerminalPane(paneKey: string, expectedWorktreeId?: string): RuntimeTerminalResolvePane {
     // Why: the renderer context menu only knows the stable pane key; main owns
     // the runtime terminal handle that agents and CLI commands can address.

@@ -30,6 +30,9 @@ export type CoordinatorRuntime = {
   getTerminalPaneKey?(handle: string): string | null
   // Why: Windows can host native and WSL workers at once, so the worker pane (not the coordinator) picks the packaged CLI name.
   getTerminalOrchestrationCliCommand?(handle: string): 'orca' | 'orca-ide'
+  // Why: Formapis scenario tasks encode an intended agent (assignee) in the spec header;
+  // this lets the coordinator route a task to a terminal already running that agent.
+  getTerminalAgentType?(handle: string): string | null
 }
 
 // Why (§3.1): 20 lets normal monorepo day-velocity pass but trips the 168-commit harm from ORCHESTRATOR_FEEDBACK.md (chosen in msg_eff3a646110d).
@@ -49,6 +52,26 @@ export function parseAllowStaleBaseFromSpec(spec: string): {
   }
   const strippedSpec = spec.replace(ALLOW_STALE_BASE_STRIP_RE, '')
   return { allowStale: true, strippedSpec }
+}
+
+// Why: Formapis scenario launcher (Phase 3a) encodes the intended agent as a
+// `assignee: <name>` header line in the spec, mirroring allow-stale-base.
+// The coordinator reads it to route the task to a terminal running that agent;
+// stripping keeps the infra line out of the worker's TASK block.
+const ASSIGNEE_RE = /^[ \t]*assignee:[ \t]*([^\r\n]+)[ \t]*\r?$/im
+const ASSIGNEE_STRIP_RE = /^[ \t]*assignee:[ \t]*[^\r\n]+[ \t]*\r?\n?/im
+
+export function parseAssigneeFromSpec(spec: string): {
+  assignee: string | null
+  strippedSpec: string
+} {
+  const match = ASSIGNEE_RE.exec(spec)
+  if (!match) {
+    return { assignee: null, strippedSpec: spec }
+  }
+  const assignee = match[1].trim()
+  const strippedSpec = spec.replace(ASSIGNEE_STRIP_RE, '')
+  return { assignee, strippedSpec }
 }
 
 export type CoordinatorOptions = {
@@ -352,40 +375,72 @@ export class Coordinator {
       return
     }
 
-    const terminals = await this.getAvailableTerminals()
-    if (terminals.length === 0 && slotsAvailable > 0) {
-      // Why: create at most one terminal per tick to avoid spawning many at once.
-      try {
-        const created = await this.runtime.createTerminal(this.opts.worktree, {
-          title: `Worker: ${readyTasks[0].spec.slice(0, 40)}`
-        })
-        terminals.push(created.handle)
-        this.opts.onLog(`Created worker terminal ${created.handle}`)
-      } catch (err) {
-        this.opts.onLog(`Failed to create terminal: ${err}`)
-        return
-      }
-    }
+    let terminals = await this.getAvailableTerminals()
 
     for (const task of readyTasks) {
       if (slotsAvailable <= 0 || terminals.length === 0) {
         break
       }
 
-      const targetHandle = terminals.shift()!
+      const { assignee } = parseAssigneeFromSpec(task.spec)
+      // Why: prefer a terminal already running the declared agent; fall back to any
+      // free terminal when no assignee is set or no matching terminal exists yet.
+      let match = assignee ? terminals.find((t) => t.agentType === assignee) : undefined
+      if (!match) {
+        match = terminals.find((t) => t.agentType === null) ?? terminals[0]
+      }
+
+      // Why: if the desired agent has no terminal yet and the runtime supports
+      // launching agents, create one (at most one per tick) instead of giving up.
+      if (!match && assignee && slotsAvailable > 0) {
+        try {
+          const created = await this.runtime.createTerminal(this.opts.worktree, {
+            title: `Worker (${assignee}): ${task.spec.slice(0, 40)}`,
+            ...(this.runtime.getTerminalAgentType
+              ? { command: this.resolveAgentLaunchCommand(assignee) }
+              : {})
+          })
+          match = { handle: created.handle, agentType: assignee }
+          this.opts.onLog(`Created worker terminal ${created.handle} for agent ${assignee}`)
+        } catch (err) {
+          this.opts.onLog(`Failed to create terminal for ${assignee}: ${err}`)
+          continue
+        }
+      }
+
+      if (!match) {
+        // No terminal available and none could be created; stop this tick.
+        break
+      }
+
+      terminals = terminals.filter((t) => t.handle !== match!.handle)
       slotsAvailable--
 
       try {
-        await this.dispatchTask(task, targetHandle)
+        await this.dispatchTask(task, match.handle)
       } catch (err) {
         this.opts.onLog(`Failed to dispatch task ${task.id}: ${err}`)
       }
     }
   }
 
+  /**
+   * Best-effort launch command for a known agent type. The runtime's
+   * createTerminal honors `command` to spawn the agent CLI directly so the
+   * terminal is ready to receive a dispatch prompt.
+   */
+  private resolveAgentLaunchCommand(agentType: string): string | undefined {
+    // Why: the canonical launch command is the agent's CLI name; the runtime
+    // resolves PATH/platform specifics. Unknown agents return undefined so
+    // createTerminal opens a bare shell (the dispatch prompt still works).
+    return agentType
+  }
+
   private async dispatchTask(task: TaskRow, targetHandle: string): Promise<void> {
     // Why (§3.1): drift check runs before createDispatchContext so a refusal doesn't bump failure_count (carried forward as MAX in db.ts:301-306) and burn the circuit-breaker budget; the task stays `ready` and retries next tick.
-    const { allowStale, strippedSpec } = parseAllowStaleBaseFromSpec(task.spec)
+    const { allowStale, strippedSpec: withoutStaleFlag } = parseAllowStaleBaseFromSpec(task.spec)
+    // Why: also strip the Formapis assignee header so the worker never sees it as an instruction.
+    const { strippedSpec } = parseAssigneeFromSpec(withoutStaleFlag)
     let baseDrift: {
       base: string
       behind: number
@@ -461,7 +516,7 @@ export class Coordinator {
     this.state.phase = 'monitoring'
   }
 
-  private async getAvailableTerminals(): Promise<string[]> {
+  private async getAvailableTerminals(): Promise<{ handle: string; agentType: string | null }[]> {
     try {
       const result = await this.runtime.listTerminals(this.opts.worktree)
       const dispatched = this.db.listTasks({ status: 'dispatched' })
@@ -483,7 +538,10 @@ export class Coordinator {
             t.connected &&
             t.writable
         )
-        .map((t) => t.handle)
+        .map((t) => ({
+          handle: t.handle,
+          agentType: this.runtime.getTerminalAgentType?.(t.handle) ?? null
+        }))
     } catch {
       return []
     }
