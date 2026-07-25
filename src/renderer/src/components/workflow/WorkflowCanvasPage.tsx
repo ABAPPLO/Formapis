@@ -9,7 +9,16 @@ import {
   type NodeMouseHandler
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowLeft, Download, Play, Square, Workflow as WorkflowIcon, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  Clock,
+  Download,
+  Play,
+  Square,
+  Trash2,
+  Workflow as WorkflowIcon,
+  X
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -32,6 +41,31 @@ import { layoutDag } from './layout'
 
 const POLL_INTERVAL_MS = 2000
 
+type WorkflowHistorySummary = {
+  id: string
+  scenarioName: string
+  startedAt: string
+  capturedAt: string
+  status: 'running' | 'completed' | 'failed' | 'partial'
+  taskCount: number
+  completedCount: number
+  failedCount: number
+  agentRefs: string[]
+}
+
+type WorkflowHistoryRecord = WorkflowHistorySummary & {
+  tasks: {
+    id: string
+    taskTitle: string
+    assignee: string
+    spec: string
+    status: string
+    deps: string[]
+    result: string | null
+  }[]
+  scenarioYaml: string
+}
+
 type OrchestrationTask = {
   id: string
   task_title: string | null
@@ -53,6 +87,29 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [agentYaml, setAgentYaml] = useState<string | null>(null)
   const [launching, setLaunching] = useState(false)
+  const [history, setHistory] = useState<WorkflowHistorySummary[]>([])
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
+
+  const loadHistory = useCallback(async (): Promise<void> => {
+    try {
+      const target = getActiveRuntimeTarget(settings)
+      const result = await callRuntimeRpc<{ items: WorkflowHistorySummary[] }>(
+        target,
+        'workflow-history.list',
+        {}
+      ).catch(() => ({ items: [] as WorkflowHistorySummary[] }))
+      // The RPC returns an array directly, not wrapped in {items}
+      const list =
+        (result as unknown as WorkflowHistorySummary[]) ??
+        (result as { items?: WorkflowHistorySummary[] }).items ??
+        []
+      if (mountedRef.current) {
+        setHistory(Array.isArray(list) ? list : [])
+      }
+    } catch {
+      // silent
+    }
+  }, [mountedRef, settings])
 
   const loadScenarios = useCallback(async (): Promise<void> => {
     try {
@@ -89,10 +146,11 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
 
   useEffect(() => {
     void loadScenarios()
+    void loadHistory()
     void pollTasks()
     const interval = setInterval(() => void pollTasks(), POLL_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [loadScenarios, pollTasks])
+  }, [loadScenarios, loadHistory, pollTasks])
 
   const handleLaunch = async (): Promise<void> => {
     if (!selectedScenario) {
@@ -142,7 +200,9 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         scenarioName: string
         agentRefs: string[]
         taskCount: number
+        historyId: string
       }>(target, 'orchestration.exportYaml', {})
+      // Download file
       const blob = new Blob([result.yaml], { type: 'text/yaml' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -150,9 +210,59 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       a.download = `${result.scenarioName}.yaml`
       a.click()
       URL.revokeObjectURL(url)
-      toast.success(`Exported ${result.taskCount} tasks / ${result.agentRefs.length} agents`)
+      // Save to Scenario library so it appears in the selector and can be re-run
+      await window.api.scenarios.save(result.scenarioName, result.yaml)
+      await loadScenarios()
+      await loadHistory()
+      toast.success(
+        `Exported ${result.taskCount} tasks / ${result.agentRefs.length} agents (saved to scenarios + history)`
+      )
     } catch (error) {
       toast.error('Export failed', { description: String(error) })
+    }
+  }
+
+  const handleViewHistory = useCallback(
+    async (historyId: string): Promise<void> => {
+      try {
+        const target = getActiveRuntimeTarget(settings)
+        const record = await callRuntimeRpc<WorkflowHistoryRecord>(
+          target,
+          'workflow-history.read',
+          { id: historyId }
+        )
+        if (mountedRef.current) {
+          setSelectedHistoryId(historyId)
+          // Load historical tasks into the canvas for re-inspection
+          setTasks(
+            record.tasks.map((t) => ({
+              id: t.id,
+              task_title: t.taskTitle,
+              spec: `assignee: ${t.assignee}\n${t.spec}`,
+              status: t.status as OrchestrationTask['status'],
+              deps: JSON.stringify(t.deps)
+            }))
+          )
+          toast.info(`Viewing history: ${record.scenarioName}`)
+        }
+      } catch (error) {
+        toast.error('Could not load history', { description: String(error) })
+      }
+    },
+    [mountedRef, settings]
+  )
+
+  const handleDeleteHistory = async (historyId: string): Promise<void> => {
+    try {
+      const target = getActiveRuntimeTarget(settings)
+      await callRuntimeRpc(target, 'workflow-history.remove', { id: historyId })
+      await loadHistory()
+      if (selectedHistoryId === historyId) {
+        setSelectedHistoryId(null)
+      }
+      toast.success('History deleted')
+    } catch (error) {
+      toast.error('Delete failed', { description: String(error) })
     }
   }
 
@@ -306,6 +416,76 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
 
       {/* Canvas + side panel */}
       <div className="relative flex min-h-0 flex-1">
+        {/* History sidebar */}
+        <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/20">
+          <div className="border-b px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <Clock className="mr-1 inline size-3" />
+            History ({history.length})
+          </div>
+          <div className="flex-1 overflow-y-auto scrollbar-sleek">
+            {history.length === 0 ? (
+              <p className="px-3 py-4 text-center text-xs text-muted-foreground/60">
+                No runs yet. Export a workflow to capture its history.
+              </p>
+            ) : (
+              history.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => void handleViewHistory(h.id)}
+                  className={cn(
+                    'group flex w-full flex-col gap-1 border-b px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50',
+                    selectedHistoryId === h.id && 'bg-primary/5'
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="truncate font-medium">{h.scenarioName}</span>
+                    <span
+                      className={cn(
+                        'size-2 shrink-0 rounded-full',
+                        h.status === 'completed'
+                          ? 'bg-emerald-500'
+                          : h.status === 'failed'
+                            ? 'bg-red-500'
+                            : h.status === 'partial'
+                              ? 'bg-amber-500'
+                              : 'bg-blue-500'
+                      )}
+                    />
+                  </div>
+                  <span className="text-muted-foreground">
+                    {h.completedCount}/{h.taskCount} done
+                    {h.failedCount > 0 ? `, ${h.failedCount} failed` : ''}
+                  </span>
+                  <span className="text-muted-foreground/50">
+                    {new Date(h.capturedAt).toLocaleString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                  {h.agentRefs.length > 0 ? (
+                    <span className="truncate text-muted-foreground/40">
+                      {h.agentRefs.join(', ')}
+                    </span>
+                  ) : null}
+                  <span
+                    className="mt-0.5 hidden items-center gap-1 text-destructive group-hover:flex"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleDeleteHistory(h.id)
+                    }}
+                  >
+                    <Trash2 className="size-3" /> Delete
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+
+        {/* Canvas */}
         <div className="flex-1">
           {nodes.length > 0 ? (
             <ReactFlow

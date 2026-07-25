@@ -7,6 +7,13 @@ import { buildDispatchPreamble } from '../../orchestration/preamble'
 import { formatMessageBanner } from '../../orchestration/formatter'
 import { isGroupAddress, resolveGroupAddress } from '../../orchestration/groups'
 import { exportTasksToScenarioYaml } from '../../../scenarios/exporter'
+import {
+  saveWorkflowSnapshot,
+  listWorkflowHistory,
+  readWorkflowHistory,
+  removeWorkflowHistory,
+  type WorkflowHistoryRecord
+} from '../../../workflow-history'
 import { reconcileLifecycleMessage } from '../../orchestration/lifecycle-reconciliation'
 import { abbreviateOrchestrationTasks } from '../../../../shared/orchestration-task-summary'
 import { ORCHESTRATION_GATE_METHODS } from './orchestration-gates'
@@ -645,7 +652,45 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
     params: z.object({ scenarioName: z.string().optional() }).default({}),
     handler: (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
-      return exportTasksToScenarioYaml(db, params.scenarioName)
+      const exported = exportTasksToScenarioYaml(db, params.scenarioName)
+      // Why: also snapshot the current run into workflow history so it survives
+      // resetTasks and shows up in the history sidebar for re-inspection/re-run.
+      const run = db.getActiveCoordinatorRun()
+      const tasks = db.listTasksWithDispatch()
+      const record = saveWorkflowSnapshot({
+        scenarioName: exported.scenarioName,
+        startedAt: run?.created_at ?? new Date().toISOString(),
+        tasks,
+        scenarioYaml: exported.yaml
+      })
+      return { ...exported, historyId: record.id }
+    }
+  }),
+
+  defineMethod({
+    name: 'workflow-history.list',
+    params: z.object({}).default({}),
+    handler: async () => listWorkflowHistory()
+  }),
+
+  defineMethod({
+    name: 'workflow-history.read',
+    params: z.object({ id: z.string().min(1) }),
+    handler: async (params) => {
+      const record = readWorkflowHistory(params.id)
+      if (!record) {
+        throw new Error(`Workflow history ${params.id} not found`)
+      }
+      return record satisfies WorkflowHistoryRecord
+    }
+  }),
+
+  defineMethod({
+    name: 'workflow-history.remove',
+    params: z.object({ id: z.string().min(1) }),
+    handler: async (params) => {
+      removeWorkflowHistory(params.id)
+      return { ok: true }
     }
   })
 ]
