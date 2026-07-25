@@ -241,3 +241,45 @@ export function removeCanonicalResource(
 export function canonicalResourceId(kind: ResourceKind, name: string): string {
   return `canon-${createHash('sha1').update(`${kind}:${name}`).digest('hex').slice(0, 16)}`
 }
+
+/** The on-disk shape of a canonical MCP server definition file. */
+export type CanonicalMcpFile = {
+  name: string
+  description: string | null
+  transport: 'stdio' | 'http'
+  command: string | null
+  args: string[]
+  url: string | null
+  env: Record<string, string>
+}
+
+/** Read a canonical MCP server definition; returns null if missing or invalid. */
+export function readCanonicalMcpServer(
+  name: string,
+  homeDir: string = homedir()
+): CanonicalMcpFile | null {
+  const filePath = getCanonicalResourcePath('mcp', name, homeDir)
+  const parsed = safeReadJson(filePath)
+  if (!parsed) {
+    return null
+  }
+  const transport = parsed.transport === 'http' ? 'http' : 'stdio'
+  return {
+    name: typeof parsed.name === 'string' ? parsed.name : name,
+    description: typeof parsed.description === 'string' ? parsed.description : null,
+    transport,
+    command: typeof parsed.command === 'string' ? parsed.command : null,
+    args: Array.isArray(parsed.args)
+      ? (parsed.args as unknown[]).filter((a): a is string => typeof a === 'string')
+      : [],
+    url: typeof parsed.url === 'string' ? parsed.url : null,
+    env:
+      parsed.env && typeof parsed.env === 'object' && !Array.isArray(parsed.env)
+        ? Object.fromEntries(
+            Object.entries(parsed.env as Record<string, unknown>).filter(
+              ([, v]) => typeof v === 'string'
+            ) as [string, string][]
+          )
+        : {}
+  }
+}

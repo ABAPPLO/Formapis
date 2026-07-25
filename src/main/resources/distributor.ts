@@ -2,7 +2,14 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentType } from '../../shared/agent-status-types'
 import type { DistributeResult, DistributionStatus, ResourceKind } from '../../shared/resources'
-import { getCanonicalResourcePath } from './canonical-store'
+import { getCanonicalResourcePath, readCanonicalMcpServer } from './canonical-store'
+import { buildMcpHomeCandidates } from './mcp-discovery-sources'
+import {
+  canonicalToAgentEntry,
+  removeMcpServerFromJsonConfig,
+  readServerEntry,
+  upsertMcpServerIntoJsonConfig
+} from './mcp-config-writers'
 import { inspectLinkState, linkResourceToTarget, removeOwnedResource } from './link-utils'
 
 /**
@@ -62,16 +69,7 @@ export function distributeResource(
   const statuses: DistributionStatus[] = []
 
   if (kind === 'mcp') {
-    // Phase 1b-2 will implement read-modify-write for MCP config entries.
-    return {
-      resource: { kind, name },
-      statuses: buildSkillDistributionTargets(homeDir).map((t) => ({
-        agent: t.agent,
-        targetPath: '',
-        state: 'unsupported',
-        note: 'MCP server distribution arrives in Phase 1b-2'
-      }))
-    }
+    return distributeMcpResource(name, homeDir, options.agents)
   }
 
   const targets = buildSkillDistributionTargets(homeDir).filter(
@@ -109,12 +107,7 @@ export function inspectDistribution(
 ): DistributionStatus[] {
   const sourcePath = getCanonicalResourcePath(kind, name, homeDir)
   if (kind === 'mcp') {
-    return buildSkillDistributionTargets(homeDir).map((t) => ({
-      agent: t.agent,
-      targetPath: '',
-      state: 'unsupported' as const,
-      note: 'MCP server distribution arrives in Phase 1b-2'
-    }))
+    return inspectMcpDistribution(name, homeDir)
   }
   return buildSkillDistributionTargets(homeDir).map((target) => {
     const targetPath = join(target.skillsDir, name)
@@ -137,7 +130,7 @@ export function undistributeResource(
   homeDir: string = homedir()
 ): DistributionStatus[] {
   if (kind === 'mcp') {
-    return inspectDistribution(kind, name, homeDir)
+    return undistributeMcpResource(name, homeDir)
   }
   const sourcePath = getCanonicalResourcePath(kind, name, homeDir)
   return buildSkillDistributionTargets(homeDir).map((target) => {
@@ -150,6 +143,140 @@ export function undistributeResource(
       state: removed
         ? 'missing'
         : inspectLinkState(targetPath, target.skillsDir, entryKey, sourcePath)
+    }
+  })
+}
+
+// ─── MCP server distribution (read-modify-write agent config files) ─────────
+
+/**
+ * Distribute a canonical MCP server into each agent's config file.
+ * JSON configs (claude/cursor/gemini) get a real upsert; TOML/YAML (codex/
+ * hermes) report unsupported until a writer is added.
+ */
+function distributeMcpResource(
+  name: string,
+  homeDir: string,
+  agentsFilter?: AgentType[]
+): DistributeResult {
+  const def = readCanonicalMcpServer(name, homeDir)
+  if (!def) {
+    return {
+      resource: { kind: 'mcp', name },
+      statuses: []
+    }
+  }
+  const entry = canonicalToAgentEntry(def)
+  const candidates = buildMcpHomeCandidates(homeDir).filter(
+    (c) => !agentsFilter || agentsFilter.includes(c.agent)
+  )
+  // Deduplicate by agent: prefer the first candidate per agent (e.g. ~/.claude.json over ~/.claude/mcp.json).
+  const seenAgents = new Set<AgentType>()
+  const statuses: DistributionStatus[] = candidates.map((c) => {
+    if (seenAgents.has(c.agent)) {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'missing',
+        note: 'skipped duplicate'
+      }
+    }
+    seenAgents.add(c.agent)
+    if (c.parser !== 'json') {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'unsupported',
+        note: `${c.parser} config write arrives in a later phase`
+      }
+    }
+    try {
+      const result = upsertMcpServerIntoJsonConfig(c.absolutePath, name, entry, c.serversPath)
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'linked',
+        note: result
+      }
+    } catch (error) {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'foreign',
+        note: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+  return { resource: { kind: 'mcp', name }, statuses }
+}
+
+/** Inspect MCP distribution state per agent without mutating anything. */
+function inspectMcpDistribution(name: string, homeDir: string): DistributionStatus[] {
+  const candidates = buildMcpHomeCandidates(homeDir)
+  const seenAgents = new Set<AgentType>()
+  return candidates.map((c) => {
+    if (seenAgents.has(c.agent)) {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'missing',
+        note: 'skipped duplicate'
+      }
+    }
+    seenAgents.add(c.agent)
+    if (c.parser !== 'json') {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'unsupported',
+        note: `${c.parser} config write arrives in a later phase`
+      }
+    }
+    const serverEntry = readServerEntry(c.absolutePath, name, c.parser, c.serversPath)
+    return {
+      agent: c.agent,
+      targetPath: c.absolutePath,
+      state: serverEntry ? 'linked' : 'missing'
+    }
+  })
+}
+
+/** Remove a distributed MCP server from each agent's JSON config. */
+function undistributeMcpResource(name: string, homeDir: string): DistributionStatus[] {
+  const candidates = buildMcpHomeCandidates(homeDir)
+  const seenAgents = new Set<AgentType>()
+  return candidates.map((c) => {
+    if (seenAgents.has(c.agent)) {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'missing',
+        note: 'skipped duplicate'
+      }
+    }
+    seenAgents.add(c.agent)
+    if (c.parser !== 'json') {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'unsupported',
+        note: `${c.parser} config write arrives in a later phase`
+      }
+    }
+    try {
+      removeMcpServerFromJsonConfig(c.absolutePath, name, c.serversPath)
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'missing'
+      }
+    } catch (error) {
+      return {
+        agent: c.agent,
+        targetPath: c.absolutePath,
+        state: 'foreign',
+        note: error instanceof Error ? error.message : String(error)
+      }
     }
   })
 }
