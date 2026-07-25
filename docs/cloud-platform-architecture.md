@@ -95,12 +95,16 @@
 
 ### 4.1 云端 agent 谁来执行？
 
-**本地执行**。agent CLI（claude/codex/hermes）需要：
-- 本地文件系统（读写代码、git worktree）
-- 本地 API key（用户的 Claude/OpenAI 订阅）
-- 本地终端（PTY 交互）
+**云端直接执行**。agent CLI（claude/codex/hermes）直接安装在云端 VPS 上，
+用户的 API key 安全同步到云端，agent 在云端运行。
 
-云端编排引擎创建 task DAG → 通过中继下发到用户本地 → 本地 agent CLI 执行 → 结果回传云端。
+- agent CLI 安装在云端 VPS（claude/codex/gemini 等都是 Linux CLI）
+- 用户 API key 同步到云端（加密传输 + 加密存储，见 4.5 节）
+- 云端编排引擎创建 task DAG → 云端 agent CLI 直接执行 → 结果存云端 DB
+- 用户在 Web 上看到完整的执行过程和结果
+- 不需要下发到本地（本地 Formapis 只负责数据同步，不参与执行）
+
+模式 B（仅中继）仍为本地执行：中继只做网络穿透，agent 在本地跑。
 
 ### 4.2 多租户隔离
 
@@ -205,6 +209,127 @@ src/renderer/src/cloud/         ← 新增
 云端 `cloud-preload-api.ts` 把所有 `window.api.*` 调用替换为 `fetch('/api/*')`，
 UI 组件完全复用，用户在云端 Web 看到的界面和本地桌面端一样。
 
+### 4.5 API key 安全同步方案
+
+agent CLI 直接装在云端，核心挑战是：用户的 API key 怎么安全地同步到云端？
+
+#### 各 agent CLI 的认证方式
+
+| agent CLI | 认证方式 | 存在哪 | 格式 |
+|-----------|---------|--------|------|
+| claude | API key / OAuth token | `~/.claude/config.json` + OS keychain | `primaryApiKey` 字段 |
+| codex | API key / OAuth | `~/.codex/config.toml` | TOML 配置 |
+| hermes | API key | `~/.hermes/config.yaml` | YAML 配置 |
+| gemini | API key | `~/.gemini/settings.json` | JSON |
+| grok | API key | `~/.grok/` | 文件 |
+
+#### 三层安全设计
+
+**第一层：传输安全（本地 → 云端）**
+
+```
+本地 Formapis                     云端 API
+│                                 │
+│  1. 用户登录云端 → JWT + 会话密钥 │
+│                                 │
+│  2. 收集本地 agent key:          │
+│     ~/.claude/config.json       │
+│     ~/.codex/config.toml        │
+│                                 │
+│  3. 用会话密钥加密 ──────────────►  POST /api/agent-keys/upload
+│     (AES-256-GCM)               │  (密文传输，TLS + 应用层加密)
+│                                 │
+│                                 │  4. 云端解密 → 加密存储
+```
+
+**第二层：存储安全（云端怎么存）**
+
+```
+云端 PostgreSQL:
+
+  agent_keys 表:
+  ├── user_id:     user-A
+  ├── agent_type:  claude
+  ├── key_cipher:  AES-256-GCM(用户主密钥, "sk-ant-...")
+  ├── key_hash:    sha256(key)  ← 用于比对，不存明文
+  ├── created_at:  ...
+  └── last_used:   ...
+
+  用户主密钥:
+  ├── 从用户密码派生 (PBKDF2/Argon2)
+  ├── 数据库里只存密文，没有主密钥解不开
+  └── 云端管理员有 DB 权限但没有用户密码
+```
+
+**第三层：使用安全（云端 agent CLI 怎么用 key）**
+
+```
+云端 Formapis 实例（每用户隔离 HOME 目录）:
+
+  用户 A 发起 task → 云端 coordinator 调度
+      │
+      ▼
+  从 agent_keys 表解密用户 A 的 claude key
+      │
+      ▼
+  写入用户 A 的隔离环境:
+  /home/formapis/users/user-A/.claude/config.json
+      │
+      ▼
+  用 user-A 的 HOME 启动 claude CLI
+  HOME=/home/formapis/users/user-A claude --print "..."
+      │
+      ▼
+  执行完成 → 清理临时 key 文件（或用 tmpfs）
+```
+
+#### 安全保障
+
+| 风险 | 措施 |
+|------|------|
+| 传输被截获 | TLS (HTTPS) + 应用层 AES-256-GCM 双重加密 |
+| 云端数据库泄露 | key 只存密文，主密钥从用户密码派生，没有密码解不开 |
+| 云端管理员偷看 | 管理员有 DB 权限但没有用户密码（PBKDF2 派生主密钥） |
+| key 过期/泄露 | 用户可随时 "Revoke All Keys" → 云端立即删除 |
+| key 残留 | agent CLI 执行完后清理临时 key 文件（tmpfs / 内存文件系统） |
+| 多用户串用 | 每用户独立 HOME 目录 + 独立 agent_keys 行（user_id 隔离） |
+
+#### 用户操作流程
+
+```
+本地 Formapis → Settings → Cloud → Agent Key Sync:
+
+  ☑ Claude    ✓ synced (sk-ant-***)
+  ☑ Codex     ✓ synced
+  ☑ Gemini    ✓ synced
+  ☐ Hermes    not configured
+
+  [Sync Keys Now]  [Revoke All Keys]
+
+  ⚠️ Keys are encrypted (AES-256) and stored on the cloud server.
+     You can revoke at any time.
+```
+
+#### 设计决策
+
+- **不验证 key 有效性**：用户上传就存，agent CLI 用的时候自然知道好不好使（claude 报错 = key 无效）。避免云端滥用 key 做验证调用。
+- **不复用 orca 的 keychain**：orca 的 `claude-accounts/keychain.ts`（OS keychain）和 `speech/openai-api-key-store.ts`（safeStorage）依赖本地 OS，云端没有用户的 OS keychain，改用数据库加密存储。
+- **key 可以随时撤销**：用户点 "Revoke All Keys" → 云端立即删除该用户所有 agent_keys 行。
+
+#### 同步 API 设计
+
+```
+POST /api/agent-keys/upload       ← 本地加密上传 agent key
+  body: { agent: "claude", keyCipher: "..." }
+  → { ok: true }
+
+GET  /api/agent-keys/list          ← 查询已同步的 agent key（只返回 hash，不返回明文）
+  → { keys: [{ agent: "claude", hash: "ab12...", syncedAt: "..." }] }
+
+DELETE /api/agent-keys/:agent      ← 撤销单个 agent key
+DELETE /api/agent-keys             ← 撤销所有 key（Revoke All）
+```
+
 ---
 
 ## 五、数据同步设计
@@ -217,10 +342,12 @@ UI 组件完全复用，用户在云端 Web 看到的界面和本地桌面端一
 ├── scenarios/*.yaml  ◄──同步──►  scenarios 表
 ├── resources/        ◄──同步──►  resources 表
 ├── workflow-history/ ◄──同步──►  history 表
-└── (不同步)                    (不同步)
-    ├── agent CLI               ├── agent CLI（云端不装）
-    ├── API key                 ├── API key（各自配）
-    └── 本地 git worktree       └── 本地 git worktree
+└── (加密同步)                  (加密存储)
+    └── agent API keys          └── agent_keys 表（AES-256，见 4.5 节）
+
+不同步:
+    ├── agent CLI 二进制（云端 VPS 预装）
+    └── 本地 git worktree（用户可选上传 repo）
 ```
 
 ### 同步策略
