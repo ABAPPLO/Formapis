@@ -6,6 +6,7 @@ import type { MessageType, MessagePriority, TaskStatus } from '../../orchestrati
 import { buildDispatchPreamble } from '../../orchestration/preamble'
 import { formatMessageBanner } from '../../orchestration/formatter'
 import { isGroupAddress, resolveGroupAddress } from '../../orchestration/groups'
+import { exportTasksToScenarioYaml } from '../../../scenarios/exporter'
 import { reconcileLifecycleMessage } from '../../orchestration/lifecycle-reconciliation'
 import { abbreviateOrchestrationTasks } from '../../../../shared/orchestration-task-summary'
 import { ORCHESTRATION_GATE_METHODS } from './orchestration-gates'
@@ -636,6 +637,15 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
         return { reset: 'messages' }
       }
       throw new Error('Invalid reset scope')
+    }
+  }),
+
+  defineMethod({
+    name: 'orchestration.exportYaml',
+    params: z.object({ scenarioName: z.string().optional() }).default({}),
+    handler: (params, { runtime }) => {
+      const db = runtime.getOrchestrationDb()
+      return exportTasksToScenarioYaml(db, params.scenarioName)
     }
   })
 ]

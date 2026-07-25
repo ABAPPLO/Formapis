@@ -8,7 +8,8 @@ import {
   LayoutDashboard,
   MessageCircleQuestion,
   Search,
-  Smartphone
+  Smartphone,
+  Workflow
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '@/store'
@@ -135,6 +136,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openMobilePage = useAppStore((s) => s.openMobilePage)
   const openResourcesPage = useAppStore((s) => s.openResourcesPage)
   const openAgentsYamlPage = useAppStore((s) => s.openAgentsYamlPage)
+  const openTaskBoardPage = useAppStore((s) => s.openTaskBoardPage)
   const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const activeView = useAppStore((s) => s.activeView)
@@ -147,6 +149,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const mobileActive = activeView === 'mobile'
   const resourcesActive = activeView === 'resources'
   const agentsYamlActive = activeView === 'agents-yaml'
+  const taskBoardActive = activeView === 'task-board'
   const activityUnreadCount = useActivityUnreadCount(showAgentsButton, 'sidebar-badge')
   const mobileOnboardingBadge = useMobileSidebarOnboardingBadge(showMobileButton)
   const hideAutomationsButton = React.useCallback(() => {
@@ -334,6 +337,26 @@ const SidebarNav = React.memo(function SidebarNav() {
           strokeWidth={agentsYamlActive ? 2.25 : 1.75}
         />
         <span className="flex-1">Agents</span>
+      </button>
+      <button
+        type="button"
+        onClick={openTaskBoardPage}
+        aria-current={taskBoardActive ? 'page' : undefined}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
+          taskBoardActive
+            ? 'bg-worktree-sidebar-accent text-worktree-sidebar-accent-foreground'
+            : 'text-worktree-sidebar-foreground/60 hover:bg-worktree-sidebar-foreground/8'
+        )}
+      >
+        <Workflow
+          className={cn(
+            'size-4 shrink-0',
+            !taskBoardActive && 'text-worktree-sidebar-foreground/30'
+          )}
+          strokeWidth={taskBoardActive ? 2.25 : 1.75}
+        />
+        <span className="flex-1">Workflow</span>
       </button>
       <button
         type="button"
