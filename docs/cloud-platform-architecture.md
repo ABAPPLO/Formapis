@@ -128,6 +128,83 @@
 | 模式 A（云上同步） | task 状态、执行结果、日志（回传） | task 级别（非实时终端） |
 | 模式 B（仅中继） | 全部（含实时终端 PTY 流） | 实时（中继透传） |
 
+### 4.4 四端架构：一套 UI 代码，多个入口
+
+桌面端、Web 端、云端 Web、移动端 App 四端的布局、代码、启动命令关系：
+
+#### 四端对比
+
+| 维度 | 桌面端 | Web 端 | 云端 Web | 移动端 App |
+|------|--------|--------|---------|-----------|
+| 代码 | `src/renderer/src/App.tsx` | 同一个 App | 同一个 App | `mobile/`（独立） |
+| 页面布局 | 与 Web/云端一样 | 与桌面一样 | 与桌面一样 | 不同（React Native） |
+| 启动命令 | `pnpm dev` / `pnpm start` | `pnpm dev:web` | 访问域名 | `npx expo start` |
+| agent 执行 | 本地 | 经中继连本地 | 云端或经中继连本地 | 经中继连本地 |
+| 数据来源 | 本地文件 | 经中继连本地 runtime | 云端 DB（同步来的） | 经中继连本地 |
+
+#### 核心原则：不分项目，复用一套代码
+
+```
+Formapis（现有项目）
+├── src/main/              ← Electron 主进程（桌面端）
+├── src/renderer/src/      ← 共享 React UI（桌面 + Web + 云端 Web）
+│   ├── App.tsx            ← 四端共享的页面布局（桌面/Web/云端）
+│   ├── web/main.tsx       ← Web 入口（配对连接本地）
+│   ├── cloud/main.tsx     ← 云端 Web 入口（连云端 API）← 新增
+│   ├── components/        ← 共享组件（Resources/Agents/Workflow 等）
+│   └── store/             ← 共享状态管理
+├── mobile/                ← 移动端（独立，React Native）
+└── src/shared/            ← 四端共享类型/schema（agent-yaml/scenario-yaml 等）
+```
+
+#### 数据层抽象：callRuntimeRpc 统一三端
+
+现有架构已有 `callRuntimeRpc` 抽象，桌面端走 IPC、Web 端走 WebSocket。
+云端只需加第三种 target，所有 UI 组件零改动：
+
+```ts
+type RuntimeClientTarget =
+  | { kind: 'local' }           // 桌面端（Electron IPC）
+  | { kind: 'environment' }     // Web 端（WebSocket 中继连本地）
+  | { kind: 'cloud' }           // 云端（HTTP API）← 新增
+```
+
+加 `{ kind: 'cloud' }` 后，现有 Resources/Agents/Workflow 页面零改动就能在云端跑。
+
+#### 移动端为什么不复用
+
+桌面端/Web端/云端使用 React (DOM)，移动端使用 React Native (Native 组件)：
+- `<View>` ≠ `<div>`，`<Text>` ≠ `<span>`，`<ScrollView>` ≠ `<div className="overflow-auto">`
+- 移动端必须独立项目（`mobile/`），但可以共享：
+  - 类型定义（`src/shared/`）
+  - API 客户端（`callRuntimeRpc` 的 RN 版本）
+  - YAML schema（`agent-yaml.ts` 等）
+
+#### 代码复用关系图
+
+```
+                    src/renderer/src/App.tsx（共享 UI）
+                       /        |          \
+            桌面端入口    云端 Web入口     Web端入口
+            (Electron)   (cloud/main.tsx)  (web/main.tsx)
+                |             |               |
+            本地 IPC      云端 HTTP API    WebSocket 中继
+                |             |               |
+              数据层抽象 callRuntimeRpc（同一个函数，三种 target）
+```
+
+#### 云端 Web 入口新增（最小改动）
+
+```
+src/renderer/src/cloud/         ← 新增
+├── main.tsx                    ← 云端入口（类似 web/main.tsx）
+├── CloudAuth.tsx               ← 登录/注册界面
+└── cloud-preload-api.ts        ← 数据层适配（window.api → fetch /api/*）
+```
+
+云端 `cloud-preload-api.ts` 把所有 `window.api.*` 调用替换为 `fetch('/api/*')`，
+UI 组件完全复用，用户在云端 Web 看到的界面和本地桌面端一样。
+
 ---
 
 ## 五、数据同步设计
