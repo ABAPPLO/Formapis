@@ -5,6 +5,7 @@ import { readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RuntimeMetadata, RuntimeTransportMetadata } from '../../shared/runtime-bootstrap'
 import type { OrcaRuntimeService } from './orca-runtime'
+import { createA2AHandler, type A2AOrchestrationAccess } from '../a2a/handler'
 import { writeRuntimeMetadata } from './runtime-metadata'
 import { RpcDispatcher } from './rpc/dispatcher'
 import type { RpcRequest, RpcResponse } from './rpc/core'
@@ -898,10 +899,26 @@ export class OrcaRuntimeRpcServer {
         this.e2eeKeypair = pairingIdentity.e2eeKeypair
         this.pairingInitializationFailure = null
         try {
+          const a2aBaseUrl = `http://127.0.0.1:${this.wsPort}`
+          const a2aAccess: A2AOrchestrationAccess = {
+            createTask: (spec, taskTitle) => {
+              const db = this.runtime.getOrchestrationDb()
+              return db.createTask({ spec, taskTitle }).id
+            },
+            getTask: (id) => {
+              const db = this.runtime.getOrchestrationDb()
+              return db.getTask(id) ?? null
+            },
+            hasActiveRun: () => {
+              return this.runtime.getOrchestrationDb().getActiveCoordinatorRun() !== undefined
+            }
+          }
           const wsTransport = new WebSocketTransport({
             host: '0.0.0.0',
             port: this.wsPort,
             staticRoot: this.webClientRoot,
+            // Why: mount A2A discovery + JSON-RPC on the same HTTP server (no new port).
+            extraRequestListener: createA2AHandler({ baseUrl: a2aBaseUrl, access: a2aAccess }),
             // Why: stable fallback port across restarts keeps paired devices' endpoints valid (STA-1511); wsPort 0 = random (E2E).
             ...(this.wsPort !== 0 ? { fallbackPort: readWsFallbackPort(this.userDataPath) } : {}),
             ...(this.preferPinnedWsPort ? { preferPinnedPort: true } : {})

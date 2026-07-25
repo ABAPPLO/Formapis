@@ -1,6 +1,12 @@
+/* eslint-disable max-lines */
 // WebSocket transport letting mobile clients reach the Orca runtime over LAN (wss:// with TLS, else ws://); auth is per-device tokens, independent of transport encryption.
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
-import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
+import {
+  createServer as createHttpServer,
+  type Server as HttpServer,
+  type RequestListener,
+  type IncomingMessage
+} from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { RpcTransport } from './transport'
 import { createStaticWebClientHandler } from './static-web-client-handler'
@@ -41,6 +47,13 @@ export type WebSocketTransportOptions = {
   fallbackPort?: number
   // Why: serve --port clients dial the pinned port; prefer it first so a stale fallback can't steal the pin (issue #8535). Default keeps fallback-first (STA-1511).
   preferPinnedPort?: boolean
+  // Why: A2A (and other non-WS HTTP routes) mount here as a chain so no new port is opened.
+  // shouldHandle is checked synchronously to decide routing (the A2A handler is async for
+  // JSON-RPC, so we can't rely on headersSent after the listener returns).
+  extraRequestListener?: {
+    shouldHandle: (req: IncomingMessage) => boolean
+    handle: RequestListener
+  }
 }
 
 export class WebSocketTransport implements RpcTransport {
@@ -53,6 +66,12 @@ export class WebSocketTransport implements RpcTransport {
   private readonly staticRoot: string | undefined
   private readonly fallbackPort: number | undefined
   private readonly preferPinnedPort: boolean
+  private readonly extraRequestListener:
+    | {
+        shouldHandle: (req: IncomingMessage) => boolean
+        handle: RequestListener
+      }
+    | undefined
   private httpServer: HttpsServer | HttpServer | null = null
   private wss: WebSocketServer | null = null
   private messageHandler: WebSocketMessageHandler | null = null
@@ -74,7 +93,8 @@ export class WebSocketTransport implements RpcTransport {
     preAuthTimeoutMs,
     staticRoot,
     fallbackPort,
-    preferPinnedPort
+    preferPinnedPort,
+    extraRequestListener
   }: WebSocketTransportOptions) {
     this.host = host
     this.port = port
@@ -89,6 +109,7 @@ export class WebSocketTransport implements RpcTransport {
     this.staticRoot = staticRoot
     this.fallbackPort = fallbackPort
     this.preferPinnedPort = preferPinnedPort === true
+    this.extraRequestListener = extraRequestListener
   }
 
   onMessage(handler: WebSocketMessageHandler): void {
@@ -162,9 +183,13 @@ export class WebSocketTransport implements RpcTransport {
   }
 
   private createHttpServer(): HttpServer | HttpsServer {
-    const requestListener = this.staticRoot
+    const staticListener = this.staticRoot
       ? createStaticWebClientHandler(this.staticRoot)
       : undefined
+    // Why: chain extra listeners (A2A, etc.) ahead of the static web client.
+    const requestListener: RequestListener | undefined = this.extraRequestListener
+      ? chainRequestListeners(this.extraRequestListener, staticListener)
+      : staticListener
     return this.tlsCert && this.tlsKey
       ? createHttpsServer({ cert: this.tlsCert, key: this.tlsKey }, requestListener)
       : createHttpServer(requestListener)
@@ -329,4 +354,25 @@ export class WebSocketTransport implements RpcTransport {
 
 function isEAddressInUse(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'EADDRINUSE'
+}
+
+/**
+ * Compose an extra listener with the static fallback. The extra listener
+ * declares which requests it owns via shouldHandle (checked synchronously),
+ * so async handlers (A2A JSON-RPC) don't race the fallback.
+ */
+function chainRequestListeners(
+  primary: { shouldHandle: (req: IncomingMessage) => boolean; handle: RequestListener },
+  fallback: RequestListener | undefined
+): RequestListener {
+  if (!fallback) {
+    return primary.handle
+  }
+  return (req, res) => {
+    if (primary.shouldHandle(req)) {
+      primary.handle(req, res)
+      return
+    }
+    fallback(req, res)
+  }
 }
