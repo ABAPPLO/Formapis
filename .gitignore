@@ -102,6 +102,10 @@ docs/**
 validation-screenshots/
 .stably-browser
 
+# Local tooling artifacts (codegraph index, brainstorm mockups)
+.codegraph/
+.superpowers/
+
 # Local scratch notes and PR evidence screenshots (not part of the product).
 /notes/
 /pr-evidence/
