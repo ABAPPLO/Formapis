@@ -28,6 +28,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Save,
   Square,
   Trash2,
   Upload,
@@ -274,42 +275,61 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
 
   // Compose mode: serialize the authored graph into a Scenario YAML (nodes→tasks,
   // edges→deps) and launch it, so the run respects order and matches the composition.
+  const buildDraftScenario = useCallback((): { name: string; yaml: string } => {
+    const nodeData = (n: DraftNode): TaskNodeData => n.data as TaskNodeData
+    const assigneeOf = (n: DraftNode): string => {
+      const a = nodeData(n).assignee
+      return a && a !== 'unknown' ? a : 'agent'
+    }
+    const agentRefs = Array.from(new Set(draftNodes.map(assigneeOf)))
+    const tasks: ScenarioTask[] = draftNodes.map((n) => {
+      const deps = draftEdges.filter((e) => e.target === n.id).map((e) => e.source)
+      const t: ScenarioTask = {
+        id: n.id,
+        assignee: assigneeOf(n),
+        spec: nodeData(n).label || n.id
+      }
+      if (deps.length > 0) {
+        t.deps = deps
+      }
+      return t
+    })
+    const scenario: ScenarioYaml = {
+      apiVersion: SCENARIO_YAML_API_VERSION,
+      kind: SCENARIO_YAML_KIND,
+      metadata: { name: `draft-${Date.now()}` },
+      spec: {
+        mode: 'orchestrated',
+        agents: agentRefs.map((ref) => ({ ref })),
+        tasks
+      }
+    }
+    return { name: scenario.metadata.name, yaml: serializeScenarioYaml(scenario) }
+  }, [draftNodes, draftEdges])
+
+  const saveDraftAsScenario = async (): Promise<void> => {
+    if (draftNodes.length === 0) {
+      toast.error('Add some nodes first')
+      return
+    }
+    try {
+      const { name, yaml } = buildDraftScenario()
+      await window.api.scenarios.save(name, yaml)
+      await loadScenarios()
+      toast.success(`Saved as scenario "${name}"`)
+    } catch (error) {
+      toast.error('Save failed', { description: String(error) })
+    }
+  }
+
   const runComposition = async (): Promise<void> => {
     if (draftNodes.length === 0) {
       return
     }
     setLaunching(true)
     try {
-      const nodeData = (n: DraftNode): TaskNodeData => n.data as TaskNodeData
-      const assigneeOf = (n: DraftNode): string => {
-        const a = nodeData(n).assignee
-        return a && a !== 'unknown' ? a : 'agent'
-      }
-      const agentRefs = Array.from(new Set(draftNodes.map(assigneeOf)))
-      const tasks: ScenarioTask[] = draftNodes.map((n) => {
-        const deps = draftEdges.filter((e) => e.target === n.id).map((e) => e.source)
-        const t: ScenarioTask = {
-          id: n.id,
-          assignee: assigneeOf(n),
-          spec: nodeData(n).label || n.id
-        }
-        if (deps.length > 0) {
-          t.deps = deps
-        }
-        return t
-      })
-      const scenario: ScenarioYaml = {
-        apiVersion: SCENARIO_YAML_API_VERSION,
-        kind: SCENARIO_YAML_KIND,
-        metadata: { name: `draft-${Date.now()}` },
-        spec: {
-          mode: 'orchestrated',
-          agents: agentRefs.map((ref) => ({ ref })),
-          tasks
-        }
-      }
-      const name = scenario.metadata.name
-      await window.api.scenarios.save(name, serializeScenarioYaml(scenario))
+      const { name, yaml } = buildDraftScenario()
+      await window.api.scenarios.save(name, yaml)
       const result = await window.api.scenarios.launch(name)
       if (!result.ok) {
         toast.error('Launch failed', { description: result.error })
@@ -459,11 +479,18 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   // Compose: draw dependency edges by hand.
   const onConnect = useCallback(
     (connection: Connection) => {
+      if (!connection.source || !connection.target) {
+        return
+      }
+      if (wouldCreateCycle(draftEdges, connection.source, connection.target)) {
+        toast.warning('Cannot connect: it would create a cycle')
+        return
+      }
       setDraftEdges((eds) =>
         addEdge({ ...connection, animated: true, className: 'stroke-amber-500/60' }, eds)
       )
     },
-    [setDraftEdges]
+    [draftEdges, setDraftEdges]
   )
 
   // Compose: append a node from a Workflow Node template.
@@ -496,6 +523,35 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
 
   // Canvas interactions (compose): instance ref + context menu.
   const rfRef = useRef<ReactFlowInstance | null>(null)
+  const clipboardRef = useRef<DraftNode[]>([])
+  const [undoStack, setUndoStack] = useState<{ nodes: DraftNode[]; edges: Edge[] }[]>([])
+  const [redoStack, setRedoStack] = useState<{ nodes: DraftNode[]; edges: Edge[] }[]>([])
+  const committedRef = useRef<{ nodes: DraftNode[]; edges: Edge[] }>(initialDraft)
+  const historyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const undo = useCallback(() => {
+    const prev = undoStack.at(-1)
+    if (!prev) {
+      return
+    }
+    setRedoStack((r) => [...r, committedRef.current])
+    setUndoStack((s) => s.slice(0, -1))
+    committedRef.current = prev
+    setDraftNodes(prev.nodes)
+    setDraftEdges(prev.edges)
+  }, [undoStack, setDraftNodes, setDraftEdges])
+
+  const redo = useCallback(() => {
+    const next = redoStack.at(-1)
+    if (!next) {
+      return
+    }
+    setUndoStack((s) => [...s, committedRef.current])
+    setRedoStack((r) => r.slice(0, -1))
+    committedRef.current = next
+    setDraftNodes(next.nodes)
+    setDraftEdges(next.edges)
+  }, [redoStack, setDraftNodes, setDraftEdges])
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(
     null
   )
@@ -704,6 +760,90 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   const isCompose = canvasMode === 'compose'
   const selectedDraftNode =
     isCompose && selectedTask ? (draftNodes.find((n) => n.id === selectedTask.id) ?? null) : null
+
+  // Copy/paste selected nodes (compose): Cmd/Ctrl+C then V. Ignored while an
+  // input/textarea/Monaco has focus so normal text copy/paste still works.
+  useEffect(() => {
+    if (!isCompose) {
+      return
+    }
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null
+      const tag = el?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (el?.isContentEditable ?? false)) {
+        return
+      }
+      const mod = navigator.userAgent.includes('Mac') ? e.metaKey : e.ctrlKey
+      if (!mod) {
+        return
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        const sel = draftNodes.filter((n) => n.selected)
+        if (sel.length > 0) {
+          clipboardRef.current = sel
+          e.preventDefault()
+        }
+      } else if (e.key === 'v' || e.key === 'V') {
+        const clip = clipboardRef.current
+        if (clip.length === 0) {
+          return
+        }
+        e.preventDefault()
+        const stamp = Date.now()
+        setDraftNodes((nds) => [
+          ...nds.map((n) => ({ ...n, selected: false })),
+          ...clip.map((n, i) => ({
+            id: `paste-${stamp}-${i}`,
+            type: 'taskNode' as const,
+            position: { x: (n.position?.x ?? 0) + 40, y: (n.position?.y ?? 0) + 40 },
+            data: { ...(n.data as TaskNodeData) },
+            selected: true
+          }))
+        ])
+      } else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault()
+        if (e.shiftKey) {
+          redo()
+        } else {
+          undo()
+        }
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault()
+        redo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isCompose, draftNodes, setDraftNodes, undo, redo])
+
+  // Auto-snapshot the draft (debounced) so undo/redo cover drags + edits;
+  // rapid changes (a drag) coalesce into one history entry.
+  useEffect(() => {
+    if (!isCompose) {
+      return
+    }
+    if (historyTimer.current) {
+      clearTimeout(historyTimer.current)
+    }
+    historyTimer.current = setTimeout(() => {
+      const cur = { nodes: draftNodes, edges: draftEdges }
+      const last = committedRef.current
+      const same =
+        last.nodes.length === cur.nodes.length &&
+        last.edges.length === cur.edges.length &&
+        JSON.stringify(last) === JSON.stringify(cur)
+      if (!same) {
+        setUndoStack((s) => [...s.slice(-49), last])
+        setRedoStack([])
+        committedRef.current = cur
+      }
+    }, 500)
+    return () => {
+      if (historyTimer.current) {
+        clearTimeout(historyTimer.current)
+      }
+    }
+  }, [draftNodes, draftEdges, isCompose])
   const rfNodes = isCompose ? draftNodes : monitorGraph.nodes
   const rfEdges = isCompose ? draftEdges : monitorGraph.edges
 
@@ -733,6 +873,15 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
               <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
                 <Upload className="mr-1.5 size-3.5" />
                 Import
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void saveDraftAsScenario()}
+                disabled={draftNodes.length === 0}
+              >
+                <Save className="mr-1.5 size-3.5" />
+                Save
               </Button>
               <span className="h-5 w-px bg-border" aria-hidden />
               <Button
@@ -1041,6 +1190,26 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
               onNodesChange={isCompose ? onDraftNodesChange : undefined}
               onEdgesChange={isCompose ? onDraftEdgesChange : undefined}
               onConnect={isCompose ? onConnect : undefined}
+              onReconnect={
+                isCompose
+                  ? (oldEdge, newConnection) => {
+                      if (!newConnection.source || !newConnection.target) {
+                        return
+                      }
+                      const without = draftEdges.filter((e) => e.id !== oldEdge.id)
+                      if (wouldCreateCycle(without, newConnection.source, newConnection.target)) {
+                        toast.warning('Cannot reconnect: it would create a cycle')
+                        return
+                      }
+                      setDraftEdges((eds) =>
+                        addEdge(
+                          { ...newConnection, animated: true, className: 'stroke-amber-500/60' },
+                          eds.filter((e) => e.id !== oldEdge.id)
+                        )
+                      )
+                    }
+                  : undefined
+              }
               onNodeContextMenu={isCompose ? onNodeContextMenu : undefined}
               onPaneContextMenu={
                 isCompose
@@ -1374,6 +1543,37 @@ function historyRunDotClass(status: WorkflowHistorySummary['status']): string {
     default:
       return 'bg-blue-500' // running
   }
+}
+
+// True if adding source->target would close a dependency cycle (or a self-loop).
+function wouldCreateCycle(edges: Edge[], source: string, target: string): boolean {
+  if (source === target) {
+    return true
+  }
+  const adj = new Map<string, string[]>()
+  for (const e of edges) {
+    const list = adj.get(e.source)
+    if (list) {
+      list.push(e.target)
+    } else {
+      adj.set(e.source, [e.target])
+    }
+  }
+  const stack = [target]
+  const seen = new Set<string>([target])
+  while (stack.length > 0) {
+    const n = stack.pop() as string
+    if (n === source) {
+      return true
+    }
+    for (const next of adj.get(n) ?? []) {
+      if (!seen.has(next)) {
+        seen.add(next)
+        stack.push(next)
+      }
+    }
+  }
+  return false
 }
 
 function safeParseDeps(depsJson: string): string[] {
