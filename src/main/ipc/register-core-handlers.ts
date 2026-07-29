@@ -39,6 +39,7 @@ import { registerSessionHandlers } from './session'
 import { registerSettingsHandlers } from './settings'
 import { registerDiagnosticsHandlers } from './diagnostics'
 import { registerAgentsYamlHandlers } from './agents-yaml'
+import { registerWorkflowNodeYamlHandlers } from './workflow-nodes-yaml'
 import { registerResourcesHandlers } from './resources'
 import { registerScenariosHandlers } from './scenarios'
 import { registerSkillsHandlers } from './skills'
@@ -174,6 +175,7 @@ export function registerCoreHandlers(
   registerSkillsHandlers(store)
   registerResourcesHandlers()
   registerAgentsYamlHandlers()
+  registerWorkflowNodeYamlHandlers()
   registerScenariosHandlers(() => runtime.getOrchestrationDb())
   if (automations) {
     registerAutomationHandlers(store, automations)

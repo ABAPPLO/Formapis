@@ -95,6 +95,7 @@ import type {
   ResourceKind
 } from '../shared/resources'
 import type { AgentLaunchPayload, AgentYamlRecord } from '../shared/agent-yaml'
+import type { WorkflowNodeYamlRecord } from '../shared/workflow-node-yaml'
 import type { ScenarioRecord } from '../shared/scenario-yaml'
 import type {
   RuntimeBrowserDriverState,
@@ -2329,6 +2330,24 @@ const api = {
         }
       | { ok: false; error: string }
     > => ipcRenderer.invoke('agents-yaml:generateFromDescription', description)
+  },
+
+  workflowNodesYaml: {
+    list: (): Promise<WorkflowNodeYamlRecord[]> => ipcRenderer.invoke('workflow-nodes-yaml:list'),
+    read: (name: string): Promise<string | null> =>
+      ipcRenderer.invoke('workflow-nodes-yaml:read', name),
+    create: (input: {
+      name: string
+      displayName?: string
+      description?: string
+      role: string
+    }): Promise<WorkflowNodeYamlRecord> => ipcRenderer.invoke('workflow-nodes-yaml:create', input),
+    save: (
+      name: string,
+      rawYaml: string
+    ): Promise<{ record: WorkflowNodeYamlRecord; valid: boolean; errors: string[] }> =>
+      ipcRenderer.invoke('workflow-nodes-yaml:save', name, rawYaml),
+    remove: (name: string): Promise<void> => ipcRenderer.invoke('workflow-nodes-yaml:remove', name)
   },
 
   scenarios: {

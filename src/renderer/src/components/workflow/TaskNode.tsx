@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { cn } from '@/lib/utils'
+import { taskStatusStyle } from '../workbench/task-status-style'
 
 export type TaskNodeData = {
   label: string
@@ -10,21 +11,13 @@ export type TaskNodeData = {
   specSummary: string
 }
 
-const statusStyles: Record<string, { border: string; dot: string; label: string }> = {
-  pending: { border: 'border-muted-foreground/30', dot: 'bg-muted-foreground/40', label: '等待' },
-  ready: { border: 'border-blue-500/50', dot: 'bg-blue-500', label: '就绪' },
-  dispatched: { border: 'border-amber-500/60', dot: 'bg-amber-500 animate-pulse', label: '执行中' },
-  blocked: { border: 'border-purple-500/50', dot: 'bg-purple-500', label: '阻塞' },
-  completed: { border: 'border-emerald-500/50', dot: 'bg-emerald-500', label: '完成' },
-  failed: { border: 'border-red-500/50', dot: 'bg-red-500', label: '失败' }
-}
-
 function TaskNodeComponent({ data }: { data: TaskNodeData }): React.JSX.Element {
-  const style = statusStyles[data.status] ?? statusStyles.pending
+  const style = taskStatusStyle(data.status)
   return (
     <div
       className={cn(
-        'relative rounded-lg border-2 bg-card px-3 py-2 shadow-md transition-colors',
+        // Why: 文档「轻微浮起」= shadow-xs + 单 token border;原 shadow-md + border-2 超出三级阴影。
+        'relative rounded-lg border bg-card px-3 py-2 shadow-xs transition-colors',
         style.border
       )}
     >

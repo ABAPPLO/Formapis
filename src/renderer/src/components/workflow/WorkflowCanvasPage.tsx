@@ -10,14 +10,13 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  ArrowLeft,
+  Blocks,
   Clock,
   Download,
   Play,
   Square,
   Trash2,
-  Workflow as WorkflowIcon,
-  X
+  Workflow as WorkflowIcon
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -29,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
@@ -38,6 +38,11 @@ import { decodeAssigneeFromSpec } from '../../../../shared/scenario-yaml'
 import type { ScenarioRecord } from '../../../../shared/scenario-yaml'
 import { TaskNode, type TaskNodeData } from './TaskNode'
 import { layoutDag } from './layout'
+import { WorkflowNodesEditorSheet } from '../workflow-nodes-yaml/WorkflowNodesEditorSheet'
+import { WorkbenchShell } from '../workbench/WorkbenchShell'
+import { taskStatusStyle } from '../workbench/task-status-style'
+import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
+import { YamlEditor } from '../workbench/YamlEditor'
 
 const POLL_INTERVAL_MS = 2000
 
@@ -75,6 +80,8 @@ type OrchestrationTask = {
   assignee_handle?: string | null
 }
 
+type SidePanelMode = 'task' | 'nodes' | null
+
 export default function WorkflowCanvasPage(): React.JSX.Element {
   const closeWorkflowPage = useAppStore((s) => s.closeTaskBoardPage)
   const settings = useAppStore((s) => s.settings)
@@ -85,10 +92,13 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   const [running, setRunning] = useState(false)
   const [polling, setPolling] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
+  const [selectedTask, setSelectedTask] = useState<OrchestrationTask | null>(null)
+  const [sidePanel, setSidePanel] = useState<SidePanelMode>(null)
   const [agentYaml, setAgentYaml] = useState<string | null>(null)
   const [launching, setLaunching] = useState(false)
   const [history, setHistory] = useState<WorkflowHistorySummary[]>([])
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
+  const [deleteHistoryId, setDeleteHistoryId] = useState<string | null>(null)
 
   const loadHistory = useCallback(async (): Promise<void> => {
     try {
@@ -269,13 +279,19 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   const handleNodeClick: NodeMouseHandler = useCallback(
     async (_event, node: Node) => {
       const data = node.data as TaskNodeData | undefined
-      if (!data?.assignee) {
+      // Always surface the clicked task's own details; resolve the full task
+      // row from the polled list so the panel shows real spec/deps/status.
+      const task = tasks.find((t) => t.id === node.id) ?? null
+      setSelectedTask(task)
+      setSidePanel('task')
+      const assignee = data?.assignee && data.assignee !== 'unknown' ? data.assignee : null
+      setSelectedAgent(assignee)
+      setAgentYaml(null)
+      if (!assignee) {
         return
       }
-      setSelectedAgent(data.assignee)
-      setAgentYaml(null)
       try {
-        const yaml = await window.api.agentsYaml.read(data.assignee)
+        const yaml = await window.api.agentsYaml.read(assignee)
         if (mountedRef.current) {
           setAgentYaml(yaml)
         }
@@ -285,7 +301,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         }
       }
     },
-    [mountedRef]
+    [mountedRef, tasks]
   )
 
   // Build ReactFlow nodes + edges from orchestration tasks.
@@ -346,20 +362,22 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
     return counts
   }, [tasks])
 
-  return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <header className="flex items-center gap-2 border-b px-4 py-2">
-        <Button variant="ghost" size="icon" className="size-7" onClick={closeWorkflowPage}>
-          <ArrowLeft className="size-4" />
-        </Button>
-        <WorkflowIcon className="size-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">Workflow</h2>
-        <Badge variant="outline">{tasks.length} tasks</Badge>
-        {running ? <Badge className="bg-amber-500/15 text-amber-600">running</Badge> : null}
-        {polling ? <span className="text-xs text-muted-foreground/50">syncing…</span> : null}
+  const deleteHistoryName = history.find((h) => h.id === deleteHistoryId)?.scenarioName ?? ''
 
-        <div className="ml-auto flex items-center gap-2">
+  return (
+    <WorkbenchShell
+      title="Workflow"
+      icon={<WorkflowIcon className="size-5" />}
+      onBack={closeWorkflowPage}
+      badge={
+        <>
+          <Badge variant="outline">{tasks.length} tasks</Badge>
+          {running ? <Badge className="bg-amber-500/15 text-amber-600">running</Badge> : null}
+        </>
+      }
+      toolbar={
+        <>
+          {polling ? <span className="text-xs text-muted-foreground/50">syncing…</span> : null}
           <Select
             value={selectedScenario ?? ''}
             onValueChange={(v) => setSelectedScenario(v || null)}
@@ -399,15 +417,28 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             <Download className="mr-1.5 size-3.5" />
             Export YAML
           </Button>
-        </div>
-      </header>
-
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setSelectedTask(null)
+              setSelectedAgent(null)
+              setAgentYaml(null)
+              setSidePanel('nodes')
+            }}
+          >
+            <Blocks className="mr-1.5 size-3.5" />
+            Nodes
+          </Button>
+        </>
+      }
+    >
       {/* Status bar */}
       {tasks.length > 0 ? (
         <div className="flex gap-2 border-b px-4 py-1 text-xs text-muted-foreground">
           {Object.entries(statusCounts).map(([status, count]) => (
             <span key={status} className="flex items-center gap-1">
-              <span className={cn('size-1.5 rounded-full', statusDotClass(status))} />
+              <span className={cn('size-1.5 rounded-full', taskStatusStyle(status).dot)} />
               {status}: {count}
             </span>
           ))}
@@ -429,28 +460,26 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
               </p>
             ) : (
               history.map((h) => (
-                <button
+                <div
                   key={h.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => void handleViewHistory(h.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      void handleViewHistory(h.id)
+                    }
+                  }}
                   className={cn(
-                    'group flex w-full flex-col gap-1 border-b px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50',
-                    selectedHistoryId === h.id && 'bg-primary/5'
+                    'group flex w-full flex-col gap-1 border-b px-3 py-2 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                    selectedHistoryId === h.id && 'bg-accent'
                   )}
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-medium">{h.scenarioName}</span>
                     <span
-                      className={cn(
-                        'size-2 shrink-0 rounded-full',
-                        h.status === 'completed'
-                          ? 'bg-emerald-500'
-                          : h.status === 'failed'
-                            ? 'bg-red-500'
-                            : h.status === 'partial'
-                              ? 'bg-amber-500'
-                              : 'bg-blue-500'
-                      )}
+                      className={cn('size-2 shrink-0 rounded-full', historyRunDotClass(h.status))}
                     />
                   </div>
                   <span className="text-muted-foreground">
@@ -470,16 +499,19 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
                       {h.agentRefs.join(', ')}
                     </span>
                   ) : null}
-                  <span
-                    className="mt-0.5 hidden items-center gap-1 text-destructive group-hover:flex"
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="mt-0.5 size-6 self-start text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete run ${h.scenarioName}`}
                     onClick={(e) => {
                       e.stopPropagation()
-                      void handleDeleteHistory(h.id)
+                      setDeleteHistoryId(h.id)
                     }}
                   >
-                    <Trash2 className="size-3" /> Delete
-                  </span>
-                </button>
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
               ))
             )}
           </div>
@@ -512,38 +544,119 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
           )}
         </div>
 
-        {/* Agent YAML side panel */}
-        {selectedAgent ? (
-          <aside className="absolute right-0 top-0 flex h-full w-96 flex-col border-l bg-background shadow-lg">
-            <div className="flex items-center justify-between border-b px-4 py-2">
-              <span className="text-sm font-medium">{selectedAgent}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-6"
-                onClick={() => {
-                  setSelectedAgent(null)
-                  setAgentYaml(null)
-                }}
-              >
-                <X className="size-4" />
-              </Button>
+        {/* Right-side detail/nodes panel as a single edge-sliding Sheet. */}
+        <Sheet
+          open={sidePanel !== null}
+          onOpenChange={(o) => {
+            if (!o) {
+              setSidePanel(null)
+            }
+          }}
+        >
+          <SheetContent side="right" className="flex flex-col gap-0 p-0">
+            <SheetHeader className="flex flex-row items-center justify-between space-y-0 border-b px-4 py-2.5">
+              <SheetTitle className="truncate text-sm">
+                {sidePanel === 'task'
+                  ? ((selectedTask?.task_title || selectedTask?.id) ?? 'Task')
+                  : 'Workflow Nodes'}
+              </SheetTitle>
+            </SheetHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-sleek">
+              {sidePanel === 'task' && selectedTask ? (
+                <TaskDetailBody task={selectedTask} agent={selectedAgent} yaml={agentYaml} />
+              ) : null}
+              {sidePanel === 'nodes' ? (
+                <WorkflowNodesEditorSheet open onAddedToCanvas={() => void pollTasks()} />
+              ) : null}
             </div>
-            <div className="flex-1 overflow-y-auto scrollbar-sleek">
-              {agentYaml !== null ? (
-                <pre className="p-4 font-mono text-xs">{agentYaml}</pre>
-              ) : (
-                <p className="p-4 text-sm text-muted-foreground">
-                  Agent &quot;{selectedAgent}&quot; has no saved YAML definition. It may have been
-                  created via CLI without a Formapis agent YAML.
-                </p>
-              )}
-            </div>
-          </aside>
-        ) : null}
+          </SheetContent>
+        </Sheet>
       </div>
+
+      <ConfirmDeleteDialog
+        open={deleteHistoryId !== null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteHistoryId(null)
+          }
+        }}
+        title={`Delete run "${deleteHistoryName}"?`}
+        onConfirm={async () => {
+          if (deleteHistoryId) {
+            await handleDeleteHistory(deleteHistoryId)
+          }
+          setDeleteHistoryId(null)
+        }}
+      />
+    </WorkbenchShell>
+  )
+}
+
+function TaskDetailBody({
+  task,
+  agent,
+  yaml
+}: {
+  task: OrchestrationTask
+  agent: string | null
+  yaml: string | null
+}): React.JSX.Element {
+  const deps = safeParseDeps(task.deps)
+  const strippedSpec = decodeAssigneeFromSpec(task.spec).strippedSpec
+  return (
+    <div className="flex flex-col">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 p-4 text-sm">
+        <dt className="text-muted-foreground">Status</dt>
+        <dd className="font-medium">{task.status}</dd>
+        <dt className="text-muted-foreground">Assignee</dt>
+        <dd className="font-medium">
+          {agent ?? <span className="text-muted-foreground">no assignee</span>}
+        </dd>
+        {deps.length > 0 ? (
+          <>
+            <dt className="text-muted-foreground">Deps</dt>
+            <dd className="font-mono text-xs">{deps.join(', ')}</dd>
+          </>
+        ) : null}
+        <dt className="text-muted-foreground">Spec</dt>
+        <dd>
+          <pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-2 font-mono text-xs">
+            {strippedSpec}
+          </pre>
+        </dd>
+      </dl>
+      {agent ? (
+        <div className="border-t">
+          <div className="px-4 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Agent YAML — {agent}
+          </div>
+          {yaml !== null ? (
+            <div className="h-[360px] px-4 pb-4">
+              <YamlEditor value={yaml} onChange={() => {}} readOnly placeholder="No saved YAML" />
+            </div>
+          ) : (
+            <p className="px-4 pb-4 text-xs text-muted-foreground">
+              No saved YAML for agent &quot;{agent}&quot;.
+            </p>
+          )}
+        </div>
+      ) : null}
     </div>
   )
+}
+
+// Why: history run status uses a different enum than live tasks; keep its dot colors explicit.
+function historyRunDotClass(status: WorkflowHistorySummary['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'bg-emerald-500'
+    case 'failed':
+      return 'bg-red-500'
+    case 'partial':
+      return 'bg-amber-500'
+    default:
+      return 'bg-blue-500' // running
+  }
 }
 
 function safeParseDeps(depsJson: string): string[] {
@@ -556,23 +669,4 @@ function safeParseDeps(depsJson: string): string[] {
     // fall through
   }
   return []
-}
-
-function statusDotClass(status: string): string {
-  switch (status) {
-    case 'pending':
-      return 'bg-muted-foreground/40'
-    case 'ready':
-      return 'bg-blue-500'
-    case 'dispatched':
-      return 'bg-amber-500 animate-pulse'
-    case 'blocked':
-      return 'bg-purple-500'
-    case 'completed':
-      return 'bg-emerald-500'
-    case 'failed':
-      return 'bg-red-500'
-    default:
-      return 'bg-muted-foreground/40'
-  }
 }

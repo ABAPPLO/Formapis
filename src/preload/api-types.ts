@@ -352,6 +352,7 @@ import type {
   ResourceKind
 } from '../shared/resources'
 import type { AgentLaunchPayload, AgentYamlRecord } from '../shared/agent-yaml'
+import type { WorkflowNodeYamlRecord } from '../shared/workflow-node-yaml'
 import type { ScenarioRecord } from '../shared/scenario-yaml'
 import type { SkillFreshnessInventory } from '../shared/skill-freshness'
 import type {
@@ -2384,6 +2385,21 @@ export type PreloadApi = {
         }
       | { ok: false; error: string }
     >
+  }
+  workflowNodesYaml: {
+    list: () => Promise<WorkflowNodeYamlRecord[]>
+    read: (name: string) => Promise<string | null>
+    create: (input: {
+      name: string
+      displayName?: string
+      description?: string
+      role: string
+    }) => Promise<WorkflowNodeYamlRecord>
+    save: (
+      name: string,
+      rawYaml: string
+    ) => Promise<{ record: WorkflowNodeYamlRecord; valid: boolean; errors: string[] }>
+    remove: (name: string) => Promise<void>
   }
   scenarios: {
     list: () => Promise<ScenarioRecord[]>

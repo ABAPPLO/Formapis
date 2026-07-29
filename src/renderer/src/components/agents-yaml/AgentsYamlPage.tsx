@@ -1,9 +1,7 @@
-/* eslint-disable max-lines */
-/* oxlint-disable max-lines -- Why: AgentsYamlPage pairs a list pane with an inline YAML editor + try-run actions; splitting would break the define-edit-try loop that is the whole point of the workbench. */
+/* eslint-disable max-lines -- Why: AgentsYamlPage pairs a list pane with an inline YAML editor + try-run actions; splitting would break the define-edit-try loop that is the whole point of the workbench. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  ArrowLeft,
   Bot,
   CheckCircle2,
   Loader2,
@@ -11,6 +9,7 @@ import {
   Play,
   Plus,
   Save,
+  Search,
   Trash2
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -18,6 +17,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -34,10 +34,16 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { AgentBuilderConversation } from './AgentBuilderConversation'
+import { WorkbenchShell } from '../workbench/WorkbenchShell'
+import { YamlEditor } from '../workbench/YamlEditor'
+import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
+import { isTuiAgent } from '../../../../shared/tui-agent-config'
 import type { AgentYamlRecord } from '../../../../shared/agent-yaml'
+import type { TuiAgent } from '../../../../shared/types'
 
 const PROVIDERS = [
   'claude',
@@ -108,9 +114,10 @@ function AgentCard({
     <button
       type="button"
       onClick={onSelect}
+      data-current={selected ? 'true' : undefined}
       className={cn(
         'flex w-full flex-col gap-1 rounded-md border px-3 py-2 text-left transition-colors',
-        selected ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-muted/50'
+        selected ? 'border-border bg-accent' : 'border-transparent hover:bg-accent/60'
       )}
     >
       <div className="flex items-center gap-2">
@@ -154,6 +161,8 @@ export default function AgentsYamlPage(): React.JSX.Element {
   const [validation, setValidation] = useState<{ valid: boolean; errors: string[] } | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [builderOpen, setBuilderOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const draftRef = useRef(draft)
   draftRef.current = draft
 
@@ -254,11 +263,40 @@ export default function AgentsYamlPage(): React.JSX.Element {
         toast.error('Cannot run agent', { description: result.error })
         return
       }
-      // Phase 2: show the rendered prompt so the user can copy it into a terminal.
-      // Phase 3 will wire this to actual terminal creation via the terminals store.
-      toast.success(`Resolved launch payload for ${result.payload.displayName}`, {
-        description: `Provider: ${result.payload.provider}. System prompt rendered (${result.payload.systemPrompt.length} chars).`
+      // Phase 3: launch the agent CLI in a fresh terminal tab with the rendered
+      // system prompt as the initial message. buildAgentStartupPlan (inside
+      // launchAgentInNewTab) folds the prompt into the argv/flag for prefill
+      // agents (claude --prefill) and pastes+submits it after launch for
+      // followup agents.
+      const provider = result.payload.provider
+      if (!isTuiAgent(provider)) {
+        toast.error('Unsupported agent provider', {
+          description: `"${provider}" has no CLI launch binding.`
+        })
+        return
+      }
+      const worktreeId = useAppStore.getState().activeWorktreeId
+      if (!worktreeId) {
+        toast.error('No active workspace', {
+          description: 'Open a workspace before try-running an agent.'
+        })
+        return
+      }
+      const launch = launchAgentInNewTab({
+        agent: provider as TuiAgent,
+        worktreeId,
+        prompt: result.payload.systemPrompt,
+        launchSource: 'agents_yaml_try_run'
       })
+      if (!launch) {
+        toast.error('Could not launch agent', {
+          description: 'Empty prompt or unsupported launch mode for this provider.'
+        })
+        return
+      }
+      // launchAgentInNewTab already switches to the terminal view; close the
+      // agents page only after a successful launch.
+      closeAgentsYamlPage()
     } catch (error) {
       toast.error('Try-run failed', { description: String(error) })
     }
@@ -266,9 +304,6 @@ export default function AgentsYamlPage(): React.JSX.Element {
 
   const handleDelete = async (): Promise<void> => {
     if (!selectedName) {
-      return
-    }
-    if (!confirm(`Delete agent "${selectedName}"?`)) {
       return
     }
     try {
@@ -285,123 +320,166 @@ export default function AgentsYamlPage(): React.JSX.Element {
     [agents, selectedName]
   )
 
+  const filteredAgents = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) {
+      return agents
+    }
+    return agents.filter((a) =>
+      [a.name, a.displayName, a.description ?? '', a.provider].join(' ').toLowerCase().includes(q)
+    )
+  }, [agents, query])
+
   return (
-    <main className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b px-4 py-3">
-        <Button variant="ghost" size="icon" className="size-7" onClick={closeAgentsYamlPage}>
-          <ArrowLeft className="size-4" />
-        </Button>
-        <Bot className="size-5 text-muted-foreground" />
-        <h2 className="text-lg font-semibold">Agents</h2>
-        <Badge variant="outline">YAML</Badge>
-        <span className="ml-2 text-sm text-muted-foreground">
-          {agents.length} agent{agents.length === 1 ? '' : 's'}
-        </span>
-        <div className="ml-auto flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setBuilderOpen(true)}>
-            <MessageSquarePlus className="mr-1.5 size-3.5" />
-            Build
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-1.5 size-3.5" />
-            New
-          </Button>
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {/* List pane */}
-        <aside className="w-64 shrink-0 overflow-y-auto border-r scrollbar-sleek">
-          <div className="flex flex-col gap-1 p-2">
-            {loading ? (
-              <div className="flex items-center justify-center py-8 text-muted-foreground">
-                <Loader2 className="mr-2 size-4 animate-spin" />
-                Loading…
-              </div>
-            ) : agents.length === 0 ? (
-              <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-                No agents yet. Click <strong>New</strong> to define one.
-              </div>
-            ) : (
-              agents.map((agent) => (
-                <AgentCard
-                  key={agent.name}
-                  agent={agent}
-                  selected={agent.name === selectedName}
-                  onSelect={() => void handleSelect(agent.name)}
+    <>
+      <WorkbenchShell
+        title="Agents"
+        icon={<Bot className="size-5" />}
+        badge={<Badge variant="outline">YAML</Badge>}
+        countLabel={`${agents.length} agent${agents.length === 1 ? '' : 's'}`}
+        onBack={closeAgentsYamlPage}
+        toolbar={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setBuilderOpen(true)}>
+              <MessageSquarePlus className="mr-1.5 size-3.5" />
+              Build
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-1.5 size-3.5" />
+              New
+            </Button>
+          </>
+        }
+      >
+        <div className="flex min-h-0 flex-1">
+          {/* List pane */}
+          <aside className="w-64 shrink-0 overflow-y-auto border-r scrollbar-sleek">
+            <div className="px-2 pb-2 pt-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search agents"
+                  className="h-8 pl-7 text-xs"
                 />
-              ))
-            )}
-          </div>
-        </aside>
-
-        {/* Editor pane */}
-        <section className="flex min-w-0 flex-1 flex-col">
-          {selectedAgent ? (
-            <>
-              <div className="flex items-center gap-2 border-b px-4 py-2">
-                <span className="font-medium">{selectedAgent.displayName}</span>
-                <code className="text-xs text-muted-foreground">{selectedAgent.name}</code>
-                <div className="ml-auto flex items-center gap-1">
-                  <Button size="sm" variant="outline" onClick={() => void handleTryRun()}>
-                    <Play className="mr-1.5 size-3.5" />
-                    Try run
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleSave()}
-                    disabled={saving}
-                  >
-                    {saving ? (
-                      <Loader2 className="mr-1.5 size-3.5 animate-spin" />
-                    ) : (
-                      <Save className="mr-1.5 size-3.5" />
-                    )}
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => void handleDelete()}
-                  >
-                    <Trash2 className="mr-1.5 size-3.5" />
-                    Delete
-                  </Button>
-                </div>
               </div>
+            </div>
+            <div className="flex flex-col gap-1 px-2 pb-2">
+              {loading ? (
+                <div className="flex items-center justify-center py-8 text-muted-foreground">
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                  Loading…
+                </div>
+              ) : agents.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  No agents yet. Click <strong>New</strong> to define one.
+                </div>
+              ) : filteredAgents.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  No agents match.
+                </div>
+              ) : (
+                filteredAgents.map((agent) => (
+                  <AgentCard
+                    key={agent.name}
+                    agent={agent}
+                    selected={agent.name === selectedName}
+                    onSelect={() => void handleSelect(agent.name)}
+                  />
+                ))
+              )}
+            </div>
+          </aside>
 
-              {validation && !validation.valid ? (
-                <div className="flex items-start gap-2 border-b bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                  <div>
-                    <p className="font-medium">Validation errors (saved anyway):</p>
-                    <ul className="ml-4 list-disc">
-                      {validation.errors.map((e, i) => (
-                        <li key={i}>{e}</li>
-                      ))}
-                    </ul>
+          {/* Editor pane */}
+          <section className="flex min-w-0 flex-1 flex-col">
+            {selectedAgent ? (
+              <>
+                <div className="flex items-center gap-2 border-b px-4 py-2">
+                  <span className="font-medium">{selectedAgent.displayName}</span>
+                  <code className="text-xs text-muted-foreground">{selectedAgent.name}</code>
+                  {validation ? (
+                    validation.valid ? (
+                      <Badge variant="outline" className="gap-1 text-[10px] text-emerald-600">
+                        <CheckCircle2 className="size-3" />
+                        valid
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="gap-1 text-[10px] text-amber-600">
+                        <AlertTriangle className="size-3" />
+                        invalid
+                      </Badge>
+                    )
+                  ) : null}
+                  <div className="ml-auto flex items-center gap-1">
+                    <Button size="sm" variant="outline" onClick={() => void handleTryRun()}>
+                      <Play className="mr-1.5 size-3.5" />
+                      Try run
+                    </Button>
+                    <Button size="sm" onClick={() => void handleSave()} disabled={saving}>
+                      {saving ? (
+                        <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                      ) : (
+                        <Save className="mr-1.5 size-3.5" />
+                      )}
+                      Save
+                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleteOpen(true)}
+                          aria-label="Delete agent"
+                        >
+                          <Trash2 className="mr-1.5 size-3.5" />
+                          Delete
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" sideOffset={4}>
+                        Delete agent
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
                 </div>
-              ) : null}
 
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                spellCheck={false}
-                className="min-h-0 flex-1 resize-none bg-muted/30 p-4 font-mono text-xs outline-none"
-                placeholder="Edit agent YAML here…"
-              />
-            </>
-          ) : (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
-              <Bot className="size-10 opacity-30" />
-              <p>Select an agent or create a new one.</p>
-            </div>
-          )}
-        </section>
-      </div>
+                {validation && !validation.valid ? (
+                  <div className="flex items-start gap-2 border-b bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-400">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                    <div>
+                      <p className="font-medium">Validation errors (saved anyway):</p>
+                      <ul className="ml-4 list-disc">
+                        {validation.errors.map((e, i) => (
+                          <li key={i}>{e}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="min-h-0 flex-1">
+                  <YamlEditor
+                    value={draft}
+                    onChange={setDraft}
+                    onSave={(v) => {
+                      draftRef.current = v
+                      void handleSave()
+                    }}
+                    placeholder="Edit agent YAML…"
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Bot className="size-10 opacity-30" />
+                <p>Select an agent or create a new one.</p>
+              </div>
+            )}
+          </section>
+        </div>
+      </WorkbenchShell>
 
       <CreateAgentDialog
         open={createOpen}
@@ -419,7 +497,17 @@ export default function AgentsYamlPage(): React.JSX.Element {
           await handleSelect(name)
         }}
       />
-    </main>
+      <ConfirmDeleteDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete agent "${selectedName ?? ''}"?`}
+        description="This removes the YAML definition and cannot be undone."
+        onConfirm={async () => {
+          await handleDelete()
+          setDeleteOpen(false)
+        }}
+      />
+    </>
   )
 }
 
