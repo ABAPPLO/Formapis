@@ -53,7 +53,7 @@ export function WorkflowNodesEditorSheet({
 }: {
   open: boolean
   composeMode?: boolean
-  onDraftAdd?: (record: { name: string; displayName: string }) => void
+  onDraftAdd?: (record: { name: string; displayName: string; description?: string }) => void
   onAddedToCanvas?: () => void
 }) {
   const settings = useAppStore((s) => s.settings)
@@ -168,7 +168,11 @@ export function WorkflowNodesEditorSheet({
       return
     }
     if (composeMode && onDraftAdd) {
-      onDraftAdd({ name: node.name, displayName: node.displayName })
+      onDraftAdd({
+        name: node.name,
+        displayName: node.displayName,
+        description: node.description ?? undefined
+      })
       return
     }
     try {

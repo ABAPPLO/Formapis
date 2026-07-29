@@ -4,13 +4,16 @@ import {
   ReactFlow,
   Background,
   Controls,
+  MiniMap,
+  SelectionMode,
   addEdge,
   useEdgesState,
   useNodesState,
   type Connection,
   type Edge,
   type Node,
-  type NodeMouseHandler
+  type NodeMouseHandler,
+  type ReactFlowInstance
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { parse as parseYaml } from 'yaml'
@@ -18,9 +21,11 @@ import {
   Blocks,
   ChevronLeft,
   Clock,
+  Copy,
   Download,
   History,
   Loader2,
+  Pencil,
   Play,
   Plus,
   Square,
@@ -31,6 +36,8 @@ import {
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -151,6 +158,28 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       // storage full / unavailable — non-fatal
     }
   }, [draftNodes, draftEdges])
+
+  // Compose: keep the authored graph in the same neat dagre layout as the
+  // execution view. Re-layout only when structure (node/edge identity) changes,
+  // so manual drags persist — drag changes positions, not identity.
+  const draftEdgesRef = useRef(draftEdges)
+  draftEdgesRef.current = draftEdges
+  const draftStructureKey = `${draftNodes.map((n) => n.id).join(',')}|${draftEdges.map((e) => `${e.source}->${e.target}`).join(',')}`
+  useEffect(() => {
+    setDraftNodes((nds) => {
+      if (nds.length === 0) {
+        return nds
+      }
+      const laidById = new Map(layoutDag(nds, draftEdgesRef.current).map((n) => [n.id, n]))
+      return nds.map((n) => {
+        const laid = laidById.get(n.id)
+        // Apply dagre position + the fixed 220px width so draft nodes match the
+        // execution nodes (layoutDag sets style.width).
+        return laid ? { ...n, position: laid.position, style: laid.style } : n
+      })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-layout only on structure change
+  }, [draftStructureKey, setDraftNodes])
 
   const loadHistory = useCallback(async (): Promise<void> => {
     try {
@@ -430,14 +459,16 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   // Compose: draw dependency edges by hand.
   const onConnect = useCallback(
     (connection: Connection) => {
-      setDraftEdges((eds) => addEdge({ ...connection, animated: true }, eds))
+      setDraftEdges((eds) =>
+        addEdge({ ...connection, animated: true, className: 'stroke-amber-500/60' }, eds)
+      )
     },
     [setDraftEdges]
   )
 
   // Compose: append a node from a Workflow Node template.
   const addDraftNode = useCallback(
-    (record: { name: string; displayName: string }) => {
+    (record: { name: string; displayName: string; description?: string }) => {
       setDraftNodes((nds) => {
         const id = `${record.name}-${nds.length + 1}`
         const position = {
@@ -452,7 +483,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             label: record.displayName || record.name,
             assignee: record.name,
             status: 'ready',
-            specSummary: ''
+            specSummary: record.description ?? ''
           }
         }
         return [...nds, node]
@@ -463,13 +494,106 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
     [setDraftNodes]
   )
 
+  // Canvas interactions (compose): instance ref + context menu.
+  const rfRef = useRef<ReactFlowInstance | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(
+    null
+  )
+
+  useEffect(() => {
+    if (!ctxMenu) {
+      return
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCtxMenu(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [ctxMenu])
+
+  const addDraftNodeAt = useCallback(
+    (position: { x: number; y: number }) => {
+      const id = `node-${Date.now()}`
+      setDraftNodes((nds) => [
+        ...nds.map((n) => ({ ...n, selected: false })),
+        {
+          id,
+          type: 'taskNode',
+          position,
+          data: { label: 'New task', assignee: 'unknown', status: 'ready', specSummary: '' },
+          selected: true
+        }
+      ])
+      setSelectedTask({ id, task_title: 'New task', spec: '', status: 'pending', deps: '[]' })
+      setSidePanel('task')
+    },
+    [setDraftNodes]
+  )
+
+  const duplicateDraftNode = useCallback(
+    (nodeId: string) => {
+      setDraftNodes((nds) => {
+        const src = nds.find((n) => n.id === nodeId)
+        if (!src) {
+          return nds
+        }
+        const data = src.data as TaskNodeData
+        const newId = `${data.assignee !== 'unknown' ? data.assignee : 'node'}-${Date.now()}`
+        return nds
+          .map((n) => ({ ...n, selected: false }))
+          .concat({
+            id: newId,
+            type: 'taskNode',
+            position: { x: (src.position?.x ?? 0) + 40, y: (src.position?.y ?? 0) + 40 },
+            data: { ...data },
+            selected: true
+          })
+      })
+    },
+    [setDraftNodes]
+  )
+
+  const deleteDraftNode = useCallback(
+    (nodeId: string) => {
+      setDraftNodes((nds) => nds.filter((n) => n.id !== nodeId))
+      setDraftEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
+      if (selectedTask?.id === nodeId) {
+        setSelectedTask(null)
+        setSidePanel(null)
+      }
+      setCtxMenu(null)
+    },
+    [setDraftNodes, setDraftEdges, selectedTask]
+  )
+
+  const editDraftNode = useCallback(
+    (nodeId: string) => {
+      const n = draftNodes.find((x) => x.id === nodeId)
+      if (!n) {
+        return
+      }
+      const d = n.data as TaskNodeData
+      setSelectedTask({ id: nodeId, task_title: d.label, spec: '', status: 'pending', deps: '[]' })
+      setSidePanel('task')
+      setCtxMenu(null)
+    },
+    [draftNodes]
+  )
+
+  const onNodeContextMenu: NodeMouseHandler = useCallback((event, node) => {
+    event.preventDefault()
+    setCtxMenu({ x: event.clientX, y: event.clientY, nodeId: node.id })
+  }, [])
+
   // Compose: import a scenario/workflow YAML into the canvas.
   const handleImportFile = useCallback(
     async (file: File) => {
       try {
         const text = await file.text()
         const parsed = parseYaml(text) as {
-          tasks?: { assignee?: string; title?: string; deps?: string[] }[]
+          tasks?: { assignee?: string; title?: string; spec?: string; deps?: string[] }[]
         } | null
         const list = Array.isArray(parsed?.tasks) ? parsed!.tasks : []
         if (list.length === 0) {
@@ -484,7 +608,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             label: t.title || t.assignee || `task-${i}`,
             assignee: t.assignee || 'unknown',
             status: 'ready',
-            specSummary: ''
+            specSummary: t.spec ?? ''
           }
         }))
         const newEdges: Edge[] = []
@@ -578,6 +702,8 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   }, [tasks])
 
   const isCompose = canvasMode === 'compose'
+  const selectedDraftNode =
+    isCompose && selectedTask ? (draftNodes.find((n) => n.id === selectedTask.id) ?? null) : null
   const rfNodes = isCompose ? draftNodes : monitorGraph.nodes
   const rfEdges = isCompose ? draftEdges : monitorGraph.edges
 
@@ -882,24 +1008,64 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         )}
 
         {/* Canvas */}
-        <div className="flex-1">
+        <div
+          className="flex-1"
+          onDoubleClick={(e) => {
+            if (!isCompose) {
+              return
+            }
+            const target = e.target as HTMLElement
+            if (!target.classList.contains('react-flow__pane')) {
+              return
+            }
+            const pos = rfRef.current?.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+            if (pos) {
+              addDraftNodeAt(pos)
+            }
+          }}
+        >
           {rfNodes.length > 0 ? (
             <ReactFlow
+              onInit={(instance) => {
+                rfRef.current = instance
+              }}
               nodes={rfNodes}
               edges={rfEdges}
               nodeTypes={nodeTypes}
-              onNodeClick={handleNodeClick}
+              onNodeClick={(event, node) => {
+                setCtxMenu(null)
+                return handleNodeClick(event, node)
+              }}
               nodesDraggable={isCompose}
               nodesConnectable={isCompose}
               onNodesChange={isCompose ? onDraftNodesChange : undefined}
               onEdgesChange={isCompose ? onDraftEdgesChange : undefined}
               onConnect={isCompose ? onConnect : undefined}
+              onNodeContextMenu={isCompose ? onNodeContextMenu : undefined}
+              onPaneContextMenu={
+                isCompose
+                  ? (event) => {
+                      event.preventDefault()
+                      setCtxMenu({ x: event.clientX, y: event.clientY, nodeId: null })
+                    }
+                  : undefined
+              }
+              deleteKeyCode={isCompose ? ['Backspace', 'Delete'] : null}
+              selectionOnDrag={isCompose}
+              panOnDrag={isCompose ? [1, 2] : true}
+              selectionMode={isCompose ? SelectionMode.Partial : undefined}
               fitView
               fitViewOptions={{ padding: 0.2 }}
               proOptions={{ hideAttribution: true }}
             >
               <Background />
               <Controls showInteractive={isCompose} />
+              <MiniMap
+                pannable
+                zoomable
+                className="!bg-card"
+                nodeColor={(n) => miniNodeColor((n.data as TaskNodeData)?.status)}
+              />
             </ReactFlow>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -955,7 +1121,33 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             </SheetHeader>
             <div className="min-h-0 flex-1 overflow-hidden">
               {sidePanel === 'task' && selectedTask ? (
-                <NodeTemplateView name={selectedAgent} yaml={nodeTemplateYaml} />
+                isCompose && selectedDraftNode ? (
+                  <ComposeNodeEditor
+                    node={selectedDraftNode}
+                    onUpdate={(patch) =>
+                      setDraftNodes((nds) =>
+                        nds.map((n) =>
+                          n.id === selectedDraftNode.id
+                            ? { ...n, data: { ...(n.data as TaskNodeData), ...patch } }
+                            : n
+                        )
+                      )
+                    }
+                    onDelete={() => {
+                      setDraftNodes((nds) => nds.filter((n) => n.id !== selectedDraftNode.id))
+                      setDraftEdges((eds) =>
+                        eds.filter(
+                          (e) =>
+                            e.source !== selectedDraftNode.id && e.target !== selectedDraftNode.id
+                        )
+                      )
+                      setSidePanel(null)
+                      setSelectedTask(null)
+                    }}
+                  />
+                ) : (
+                  <NodeTemplateView name={selectedAgent} yaml={nodeTemplateYaml} />
+                )
               ) : null}
               {sidePanel === 'nodes' ? (
                 <WorkflowNodesEditorSheet
@@ -968,6 +1160,60 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             </div>
           </SheetContent>
         </Sheet>
+
+        {/* Compose context menu (right-click). */}
+        {ctxMenu ? (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setCtxMenu(null)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setCtxMenu(null)
+              }}
+            />
+            <div
+              className="fixed z-50 min-w-[168px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+              style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            >
+              {ctxMenu.nodeId ? (
+                <>
+                  <CtxItem
+                    icon={<Pencil className="size-3.5" />}
+                    label="Edit"
+                    onClick={() => editDraftNode(ctxMenu.nodeId!)}
+                  />
+                  <CtxItem
+                    icon={<Copy className="size-3.5" />}
+                    label="Duplicate"
+                    onClick={() => {
+                      duplicateDraftNode(ctxMenu.nodeId!)
+                      setCtxMenu(null)
+                    }}
+                  />
+                  <CtxItem
+                    icon={<Trash2 className="size-3.5" />}
+                    label="Delete"
+                    danger
+                    onClick={() => deleteDraftNode(ctxMenu.nodeId!)}
+                  />
+                </>
+              ) : (
+                <CtxItem
+                  icon={<Plus className="size-3.5" />}
+                  label="Add node here"
+                  onClick={() => {
+                    const pos = rfRef.current?.screenToFlowPosition({ x: ctxMenu.x, y: ctxMenu.y })
+                    if (pos) {
+                      addDraftNodeAt(pos)
+                    }
+                    setCtxMenu(null)
+                  }}
+                />
+              )}
+            </div>
+          </>
+        ) : null}
       </div>
 
       <ConfirmDeleteDialog
@@ -1019,6 +1265,100 @@ function NodeTemplateView({
       <Blocks className="size-8 opacity-30" />
       <p>{name ? `No workflow node for &quot;${name}&quot;.` : 'This task has no assignee.'}</p>
     </div>
+  )
+}
+
+function ComposeNodeEditor({
+  node,
+  onUpdate,
+  onDelete
+}: {
+  node: Node
+  onUpdate: (patch: Partial<TaskNodeData>) => void
+  onDelete: () => void
+}): React.JSX.Element {
+  const data = node.data as TaskNodeData
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b px-4 py-2.5">
+        <span className="text-sm font-semibold">Edit node</span>
+        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          draft
+        </Badge>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <div className="grid gap-1.5">
+          <Label className="text-xs text-muted-foreground">Label</Label>
+          <Input value={data.label} onChange={(e) => onUpdate({ label: e.target.value })} />
+        </div>
+        <div className="grid gap-1.5">
+          <Label className="text-xs text-muted-foreground">Assignee (workflow node)</Label>
+          <Input
+            value={data.assignee === 'unknown' ? '' : data.assignee}
+            onChange={(e) => onUpdate({ assignee: e.target.value || 'unknown' })}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <Label className="text-xs text-muted-foreground">Description</Label>
+          <textarea
+            value={data.specSummary}
+            onChange={(e) => onUpdate({ specSummary: e.target.value })}
+            rows={5}
+            spellCheck={false}
+            className="min-h-[80px] w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          />
+        </div>
+      </div>
+      <div className="border-t p-3">
+        <Button variant="destructive" size="sm" onClick={onDelete}>
+          <Trash2 className="mr-1.5 size-3.5" />
+          Delete node
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function miniNodeColor(status?: string): string {
+  switch (status) {
+    case 'completed':
+      return '#34d399'
+    case 'dispatched':
+      return '#fbbf24'
+    case 'failed':
+      return '#f87171'
+    case 'ready':
+      return '#60a5fa'
+    case 'blocked':
+      return '#c084fc'
+    default:
+      return '#6b6b6b'
+  }
+}
+
+function CtxItem({
+  icon,
+  label,
+  onClick,
+  danger
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+  danger?: boolean
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent',
+        danger && 'text-destructive hover:bg-destructive/10'
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   )
 }
 

@@ -15,11 +15,22 @@ function assigneeInitial(assignee: string): string {
   return assignee && assignee !== 'unknown' ? assignee.charAt(0).toUpperCase() : '?'
 }
 
-function TaskNodeComponent({ data }: { data: TaskNodeData }): React.JSX.Element {
+function TaskNodeComponent({
+  data,
+  selected
+}: {
+  data: TaskNodeData
+  selected?: boolean
+}): React.JSX.Element {
   const style = taskStatusStyle(data.status)
   const hasAssignee = data.assignee && data.assignee !== 'unknown'
   return (
-    <div className="relative flex w-full overflow-hidden rounded-lg border border-border bg-card shadow-xs">
+    <div
+      className={cn(
+        'relative flex w-full overflow-hidden rounded-lg border border-border bg-card shadow-xs transition-shadow',
+        selected && 'ring-2 ring-primary'
+      )}
+    >
       {/* left status edge — same hue as the status dot (dispatched pulses) */}
       <span className={cn('w-[3px] shrink-0', style.dot)} />
       <div className="min-w-0 flex-1 px-2.5 py-2">
