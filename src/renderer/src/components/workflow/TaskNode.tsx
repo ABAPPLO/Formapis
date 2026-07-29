@@ -11,28 +11,36 @@ export type TaskNodeData = {
   specSummary: string
 }
 
+function assigneeInitial(assignee: string): string {
+  return assignee && assignee !== 'unknown' ? assignee.charAt(0).toUpperCase() : '?'
+}
+
 function TaskNodeComponent({ data }: { data: TaskNodeData }): React.JSX.Element {
   const style = taskStatusStyle(data.status)
+  const hasAssignee = data.assignee && data.assignee !== 'unknown'
   return (
-    <div
-      className={cn(
-        // Why: 文档「轻微浮起」= shadow-xs + 单 token border;原 shadow-md + border-2 超出三级阴影。
-        'relative rounded-lg border bg-card px-3 py-2 shadow-xs transition-colors',
-        style.border
-      )}
-    >
-      <Handle type="target" position={Position.Left} className="!bg-muted-foreground/40" />
-      <div className="flex items-center gap-1.5">
-        <span className={cn('size-2 shrink-0 rounded-full', style.dot)} />
-        <span className="truncate text-sm font-medium">{data.label}</span>
+    <div className="relative flex w-full overflow-hidden rounded-lg border border-border bg-card shadow-xs">
+      {/* left status edge — same hue as the status dot (dispatched pulses) */}
+      <span className={cn('w-[3px] shrink-0', style.dot)} />
+      <div className="min-w-0 flex-1 px-2.5 py-2">
+        <div className="mb-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+          <span className="grid size-4 shrink-0 place-items-center rounded bg-muted-foreground/20 text-[9px] font-bold text-muted-foreground">
+            {assigneeInitial(data.assignee)}
+          </span>
+          <span className="truncate">{hasAssignee ? data.assignee : 'unassigned'}</span>
+        </div>
+        <div className="truncate text-[13px] font-semibold">{data.label}</div>
+        {data.specSummary ? (
+          <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground/80">
+            {data.specSummary}
+          </p>
+        ) : null}
+        <span className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+          <span className={cn('size-1.5 rounded-full', style.dot)} />
+          {style.label}
+        </span>
       </div>
-      {data.provider ? (
-        <span className="mt-0.5 block text-[11px] text-muted-foreground">{data.provider}</span>
-      ) : null}
-      <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground/80">{data.specSummary}</p>
-      <span className="mt-1 inline-block rounded bg-muted/50 px-1 text-[10px] text-muted-foreground">
-        {style.label}
-      </span>
+      <Handle type="target" position={Position.Left} className="!bg-muted-foreground/40" />
       <Handle type="source" position={Position.Right} className="!bg-muted-foreground/40" />
     </div>
   )

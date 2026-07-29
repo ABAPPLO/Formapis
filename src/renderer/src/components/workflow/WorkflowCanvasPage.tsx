@@ -1,21 +1,31 @@
-/* eslint-disable max-lines -- Why: WorkflowCanvasPage combines the DAG canvas, agent YAML side panel, and export in one surface; splitting would break the click-node→see-YAML→export loop. */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+/* eslint-disable max-lines -- Why: WorkflowCanvasPage combines the DAG canvas (dual monitor/compose mode), node-template inspector, and export in one surface; splitting would break the click-node→see-template→run loop. */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
   Controls,
+  addEdge,
+  useEdgesState,
+  useNodesState,
+  type Connection,
   type Edge,
   type Node,
   type NodeMouseHandler
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { parse as parseYaml } from 'yaml'
 import {
   Blocks,
+  ChevronLeft,
   Clock,
   Download,
+  History,
+  Loader2,
   Play,
+  Plus,
   Square,
   Trash2,
+  Upload,
   Workflow as WorkflowIcon
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,13 +39,19 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { callRuntimeRpc } from '@/runtime/runtime-rpc-client'
 import { getActiveRuntimeTarget } from '@/runtime/runtime-client-target'
-import { decodeAssigneeFromSpec } from '../../../../shared/scenario-yaml'
-import type { ScenarioRecord } from '../../../../shared/scenario-yaml'
+import {
+  decodeAssigneeFromSpec,
+  serializeScenarioYaml,
+  SCENARIO_YAML_API_VERSION,
+  SCENARIO_YAML_KIND
+} from '../../../../shared/scenario-yaml'
+import type { ScenarioRecord, ScenarioTask, ScenarioYaml } from '../../../../shared/scenario-yaml'
 import { TaskNode, type TaskNodeData } from './TaskNode'
 import { layoutDag } from './layout'
 import { WorkflowNodesEditorSheet } from '../workflow-nodes-yaml/WorkflowNodesEditorSheet'
@@ -45,6 +61,7 @@ import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
 import { YamlEditor } from '../workbench/YamlEditor'
 
 const POLL_INTERVAL_MS = 2000
+const DRAFT_STORAGE_KEY = 'formapis:draft-workflow'
 
 type WorkflowHistorySummary = {
   id: string
@@ -81,6 +98,22 @@ type OrchestrationTask = {
 }
 
 type SidePanelMode = 'task' | 'nodes' | null
+type CanvasMode = 'monitor' | 'compose'
+
+type DraftNode = Node
+
+function loadDraft(): { nodes: DraftNode[]; edges: Edge[] } {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { nodes?: DraftNode[]; edges?: Edge[] }
+      return { nodes: parsed.nodes ?? [], edges: parsed.edges ?? [] }
+    }
+  } catch {
+    // ignore malformed draft
+  }
+  return { nodes: [], edges: [] }
+}
 
 export default function WorkflowCanvasPage(): React.JSX.Element {
   const closeWorkflowPage = useAppStore((s) => s.closeTaskBoardPage)
@@ -94,11 +127,30 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [selectedTask, setSelectedTask] = useState<OrchestrationTask | null>(null)
   const [sidePanel, setSidePanel] = useState<SidePanelMode>(null)
-  const [agentYaml, setAgentYaml] = useState<string | null>(null)
+  const [nodeTemplateYaml, setNodeTemplateYaml] = useState<string | null | undefined>(undefined)
   const [launching, setLaunching] = useState(false)
   const [history, setHistory] = useState<WorkflowHistorySummary[]>([])
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null)
   const [deleteHistoryId, setDeleteHistoryId] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [canvasMode, setCanvasMode] = useState<CanvasMode>('compose')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const initialDraft = useMemo(loadDraft, [])
+  const [draftNodes, setDraftNodes, onDraftNodesChange] = useNodesState(initialDraft.nodes)
+  const [draftEdges, setDraftEdges, onDraftEdgesChange] = useEdgesState(initialDraft.edges)
+
+  // Persist the composed graph so a refresh doesn't lose work.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({ nodes: draftNodes, edges: draftEdges })
+      )
+    } catch {
+      // storage full / unavailable — non-fatal
+    }
+  }, [draftNodes, draftEdges])
 
   const loadHistory = useCallback(async (): Promise<void> => {
     try {
@@ -108,7 +160,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         'workflow-history.list',
         {}
       ).catch(() => ({ items: [] as WorkflowHistorySummary[] }))
-      // The RPC returns an array directly, not wrapped in {items}
       const list =
         (result as unknown as WorkflowHistorySummary[]) ??
         (result as { items?: WorkflowHistorySummary[] }).items ??
@@ -180,10 +231,75 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         maxConcurrent: result.taskIds.length
       })
       setRunning(true)
+      setCanvasMode('monitor')
       toast.success(`Launched ${result.taskIds.length} tasks`)
       await pollTasks()
     } catch (error) {
       toast.error('Launch failed', { description: String(error) })
+    } finally {
+      if (mountedRef.current) {
+        setLaunching(false)
+      }
+    }
+  }
+
+  // Compose mode: serialize the authored graph into a Scenario YAML (nodes→tasks,
+  // edges→deps) and launch it, so the run respects order and matches the composition.
+  const runComposition = async (): Promise<void> => {
+    if (draftNodes.length === 0) {
+      return
+    }
+    setLaunching(true)
+    try {
+      const nodeData = (n: DraftNode): TaskNodeData => n.data as TaskNodeData
+      const assigneeOf = (n: DraftNode): string => {
+        const a = nodeData(n).assignee
+        return a && a !== 'unknown' ? a : 'agent'
+      }
+      const agentRefs = Array.from(new Set(draftNodes.map(assigneeOf)))
+      const tasks: ScenarioTask[] = draftNodes.map((n) => {
+        const deps = draftEdges.filter((e) => e.target === n.id).map((e) => e.source)
+        const t: ScenarioTask = {
+          id: n.id,
+          assignee: assigneeOf(n),
+          spec: nodeData(n).label || n.id
+        }
+        if (deps.length > 0) {
+          t.deps = deps
+        }
+        return t
+      })
+      const scenario: ScenarioYaml = {
+        apiVersion: SCENARIO_YAML_API_VERSION,
+        kind: SCENARIO_YAML_KIND,
+        metadata: { name: `draft-${Date.now()}` },
+        spec: {
+          mode: 'orchestrated',
+          agents: agentRefs.map((ref) => ({ ref })),
+          tasks
+        }
+      }
+      const name = scenario.metadata.name
+      await window.api.scenarios.save(name, serializeScenarioYaml(scenario))
+      const result = await window.api.scenarios.launch(name)
+      if (!result.ok) {
+        toast.error('Launch failed', { description: result.error })
+        return
+      }
+      const target = getActiveRuntimeTarget(settings)
+      await callRuntimeRpc(target, 'orchestration.run', {
+        spec: `Scenario: ${result.scenarioName}`,
+        from: 'formapis',
+        maxConcurrent: result.taskIds.length
+      })
+      setRunning(true)
+      setCanvasMode('monitor')
+      setSelectedScenario(name)
+      await loadScenarios()
+      toast.success(`Launched ${result.taskIds.length} tasks`)
+      await pollTasks()
+    } catch (error) {
+      toast.error('Run failed', { description: String(error) })
     } finally {
       if (mountedRef.current) {
         setLaunching(false)
@@ -212,7 +328,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         taskCount: number
         historyId: string
       }>(target, 'orchestration.exportYaml', {})
-      // Download file
       const blob = new Blob([result.yaml], { type: 'text/yaml' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -220,7 +335,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       a.download = `${result.scenarioName}.yaml`
       a.click()
       URL.revokeObjectURL(url)
-      // Save to Scenario library so it appears in the selector and can be re-run
       await window.api.scenarios.save(result.scenarioName, result.yaml)
       await loadScenarios()
       await loadHistory()
@@ -239,11 +353,12 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         const record = await callRuntimeRpc<WorkflowHistoryRecord>(
           target,
           'workflow-history.read',
-          { id: historyId }
+          {
+            id: historyId
+          }
         )
         if (mountedRef.current) {
           setSelectedHistoryId(historyId)
-          // Load historical tasks into the canvas for re-inspection
           setTasks(
             record.tasks.map((t) => ({
               id: t.id,
@@ -253,6 +368,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
               deps: JSON.stringify(t.deps)
             }))
           )
+          setCanvasMode('monitor')
           toast.info(`Viewing history: ${record.scenarioName}`)
         }
       } catch (error) {
@@ -279,33 +395,135 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   const handleNodeClick: NodeMouseHandler = useCallback(
     async (_event, node: Node) => {
       const data = node.data as TaskNodeData | undefined
-      // Always surface the clicked task's own details; resolve the full task
-      // row from the polled list so the panel shows real spec/deps/status.
       const task = tasks.find((t) => t.id === node.id) ?? null
-      setSelectedTask(task)
+      setSelectedTask(
+        task ??
+          ({
+            id: node.id,
+            task_title: data?.label ?? null,
+            spec: '',
+            status: 'pending',
+            deps: '[]'
+          } as OrchestrationTask)
+      )
       setSidePanel('task')
       const assignee = data?.assignee && data.assignee !== 'unknown' ? data.assignee : null
       setSelectedAgent(assignee)
-      setAgentYaml(null)
+      setNodeTemplateYaml(assignee ? undefined : null)
       if (!assignee) {
         return
       }
       try {
-        const yaml = await window.api.agentsYaml.read(assignee)
+        const yaml = await window.api.workflowNodesYaml.read(assignee)
         if (mountedRef.current) {
-          setAgentYaml(yaml)
+          setNodeTemplateYaml(yaml && yaml.trim() ? yaml : null)
         }
       } catch {
         if (mountedRef.current) {
-          setAgentYaml(null)
+          setNodeTemplateYaml(null)
         }
       }
     },
     [mountedRef, tasks]
   )
 
-  // Build ReactFlow nodes + edges from orchestration tasks.
-  const { nodes, edges } = useMemo(() => {
+  // Compose: draw dependency edges by hand.
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      setDraftEdges((eds) => addEdge({ ...connection, animated: true }, eds))
+    },
+    [setDraftEdges]
+  )
+
+  // Compose: append a node from a Workflow Node template.
+  const addDraftNode = useCallback(
+    (record: { name: string; displayName: string }) => {
+      setDraftNodes((nds) => {
+        const id = `${record.name}-${nds.length + 1}`
+        const position = {
+          x: 80 + (nds.length % 5) * 240,
+          y: 60 + Math.floor(nds.length / 5) * 120
+        }
+        const node: DraftNode = {
+          id,
+          type: 'taskNode',
+          position,
+          data: {
+            label: record.displayName || record.name,
+            assignee: record.name,
+            status: 'ready',
+            specSummary: ''
+          }
+        }
+        return [...nds, node]
+      })
+      setCanvasMode('compose')
+      toast.success(`Added "${record.displayName || record.name}" to canvas`)
+    },
+    [setDraftNodes]
+  )
+
+  // Compose: import a scenario/workflow YAML into the canvas.
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text()
+        const parsed = parseYaml(text) as {
+          tasks?: { assignee?: string; title?: string; deps?: string[] }[]
+        } | null
+        const list = Array.isArray(parsed?.tasks) ? parsed!.tasks : []
+        if (list.length === 0) {
+          toast.error('No tasks found in YAML')
+          return
+        }
+        const newNodes: DraftNode[] = list.map((t, i) => ({
+          id: `imp-${i}`,
+          type: 'taskNode',
+          position: { x: 80 + (i % 5) * 240, y: 60 + Math.floor(i / 5) * 120 },
+          data: {
+            label: t.title || t.assignee || `task-${i}`,
+            assignee: t.assignee || 'unknown',
+            status: 'ready',
+            specSummary: ''
+          }
+        }))
+        const newEdges: Edge[] = []
+        list.forEach((t, i) => {
+          for (const dep of t.deps ?? []) {
+            const src = list.findIndex(
+              (x, idx) => idx !== i && (x.assignee === dep || x.title === dep)
+            )
+            if (src >= 0) {
+              newEdges.push({ id: `imp-${src}-${i}`, source: `imp-${src}`, target: `imp-${i}` })
+            }
+          }
+        })
+        setDraftNodes(newNodes)
+        setDraftEdges(newEdges)
+        setCanvasMode('compose')
+        toast.success(`Imported ${newNodes.length} nodes`)
+      } catch (error) {
+        toast.error('Import failed', { description: String(error) })
+      }
+    },
+    [setDraftNodes, setDraftEdges]
+  )
+
+  // Leave the run/history and return to composing.
+  const handleNewComposition = useCallback(() => {
+    setRunning(false)
+    setSelectedHistoryId(null)
+    setSelectedScenario(null)
+    setSelectedTask(null)
+    setSelectedAgent(null)
+    setNodeTemplateYaml(undefined)
+    setSidePanel(null)
+    setTasks([])
+    setCanvasMode('compose')
+  }, [])
+
+  // Monitor-mode graph: derived from polled tasks (read-only, dagre layout).
+  const monitorGraph = useMemo(() => {
     const taskById = new Map<string, OrchestrationTask>()
     for (const t of tasks) {
       taskById.set(t.id, t)
@@ -313,7 +531,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         taskById.set(t.task_title, t)
       }
     }
-
     const rawNodes: Node[] = tasks.map((t) => {
       const { assignee, strippedSpec } = decodeAssigneeFromSpec(t.spec)
       const data: TaskNodeData = {
@@ -322,14 +539,8 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         status: t.status,
         specSummary: strippedSpec.slice(0, 80)
       }
-      return {
-        id: t.id,
-        type: 'taskNode',
-        position: { x: 0, y: 0 },
-        data
-      }
+      return { id: t.id, type: 'taskNode', position: { x: 0, y: 0 }, data }
     })
-
     const rawEdges: Edge[] = []
     for (const t of tasks) {
       const deps = safeParseDeps(t.deps)
@@ -347,9 +558,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         }
       }
     }
-
-    const positioned = layoutDag(rawNodes, rawEdges)
-    return { nodes: positioned, edges: rawEdges }
+    return { nodes: layoutDag(rawNodes, rawEdges), edges: rawEdges }
   }, [tasks])
 
   const nodeTypes = useMemo(() => ({ taskNode: TaskNode }), [])
@@ -362,6 +571,16 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
     return counts
   }, [tasks])
 
+  const progress = useMemo(() => {
+    const done = tasks.filter((t) => t.status === 'completed').length
+    const failed = tasks.filter((t) => t.status === 'failed').length
+    return { total: tasks.length, done, failed }
+  }, [tasks])
+
+  const isCompose = canvasMode === 'compose'
+  const rfNodes = isCompose ? draftNodes : monitorGraph.nodes
+  const rfEdges = isCompose ? draftEdges : monitorGraph.edges
+
   const deleteHistoryName = history.find((h) => h.id === deleteHistoryId)?.scenarioName ?? ''
 
   return (
@@ -370,71 +589,161 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       icon={<WorkflowIcon className="size-5" />}
       onBack={closeWorkflowPage}
       badge={
-        <>
-          <Badge variant="outline">{tasks.length} tasks</Badge>
-          {running ? <Badge className="bg-amber-500/15 text-amber-600">running</Badge> : null}
-        </>
+        isCompose ? (
+          <span className="rounded-full border border-border bg-card px-2.5 py-0.5 text-xs text-muted-foreground">
+            Composing
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="size-1.5 rounded-full bg-amber-500" />
+            Monitoring
+          </span>
+        )
       }
       toolbar={
         <>
-          {polling ? <span className="text-xs text-muted-foreground/50">syncing…</span> : null}
-          <Select
-            value={selectedScenario ?? ''}
-            onValueChange={(v) => setSelectedScenario(v || null)}
-          >
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="Select scenario" />
-            </SelectTrigger>
-            <SelectContent>
-              {scenarios.map((s) => (
-                <SelectItem key={s.name} value={s.name}>
-                  {s.name} ({s.taskCount} tasks)
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {running ? (
-            <Button size="sm" variant="outline" onClick={() => void handleStop()}>
-              <Square className="mr-1.5 size-3.5" />
-              Stop
-            </Button>
+          {isCompose ? (
+            <>
+              <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                <Upload className="mr-1.5 size-3.5" />
+                Import
+              </Button>
+              <span className="h-5 w-px bg-border" aria-hidden />
+              <Button
+                size="sm"
+                onClick={() => void runComposition()}
+                disabled={draftNodes.length === 0 || launching}
+              >
+                {launching ? (
+                  <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                ) : (
+                  <Play className="mr-1.5 size-3.5" />
+                )}
+                Run
+              </Button>
+            </>
           ) : (
-            <Button
-              size="sm"
-              onClick={() => void handleLaunch()}
-              disabled={launching || !selectedScenario}
-            >
-              <Play className="mr-1.5 size-3.5" />
-              Run
-            </Button>
+            <>
+              <Select
+                value={selectedScenario ?? ''}
+                onValueChange={(v) => setSelectedScenario(v || null)}
+              >
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="Select scenario" />
+                </SelectTrigger>
+                <SelectContent>
+                  {scenarios.map((s) => (
+                    <SelectItem key={s.name} value={s.name}>
+                      {s.name} ({s.taskCount} tasks)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="h-5 w-px bg-border" aria-hidden />
+              {running ? (
+                <Button size="sm" variant="outline" onClick={() => void handleStop()}>
+                  <Square className="mr-1.5 size-3.5" />
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => void handleLaunch()}
+                  disabled={launching || !selectedScenario}
+                >
+                  <Play className="mr-1.5 size-3.5" />
+                  Run
+                </Button>
+              )}
+              <span className="h-5 w-px bg-border" aria-hidden />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => void handleExport()}
+                    disabled={tasks.length === 0}
+                    aria-label="Export YAML"
+                  >
+                    <Download className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={4}>
+                  Export
+                </TooltipContent>
+              </Tooltip>
+            </>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void handleExport()}
-            disabled={tasks.length === 0}
-          >
-            <Download className="mr-1.5 size-3.5" />
-            Export YAML
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setSelectedTask(null)
-              setSelectedAgent(null)
-              setAgentYaml(null)
-              setSidePanel('nodes')
+          <span className="h-5 w-px bg-border" aria-hidden />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => {
+                  setSelectedTask(null)
+                  setSelectedAgent(null)
+                  setNodeTemplateYaml(undefined)
+                  setSidePanel('nodes')
+                }}
+                aria-label="Workflow nodes"
+              >
+                <Blocks className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>
+              Nodes
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setHistoryOpen((o) => !o)}
+                aria-label="Toggle history"
+                data-active={historyOpen ? 'true' : undefined}
+              >
+                <History className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>
+              History ({history.length})
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={handleNewComposition}
+                aria-label="New composition"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={4}>
+              New composition
+            </TooltipContent>
+          </Tooltip>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".yaml,.yml"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) {
+                void handleImportFile(f)
+              }
+              e.target.value = ''
             }}
-          >
-            <Blocks className="mr-1.5 size-3.5" />
-            Nodes
-          </Button>
+          />
         </>
       }
     >
-      {/* Status bar */}
-      {tasks.length > 0 ? (
+      {/* Status bar (monitor only) */}
+      {!isCompose && tasks.length > 0 ? (
         <div className="flex gap-2 border-b px-4 py-1 text-xs text-muted-foreground">
           {Object.entries(statusCounts).map(([status, count]) => (
             <span key={status} className="flex items-center gap-1">
@@ -442,109 +751,186 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
               {status}: {count}
             </span>
           ))}
+          <span className="ml-auto flex items-center gap-1.5">
+            <span className="flex items-center gap-0.5">
+              {tasks.slice(0, 16).map((t) => (
+                <span
+                  key={t.id}
+                  className={cn('size-1.5 rounded-full', taskStatusStyle(t.status).dot)}
+                />
+              ))}
+            </span>
+            <b className="font-semibold text-foreground">
+              {progress.done}/{progress.total}
+            </b>
+            {progress.failed > 0 ? (
+              <span className="text-red-500">· {progress.failed} failed</span>
+            ) : null}
+          </span>
         </div>
       ) : null}
 
       {/* Canvas + side panel */}
       <div className="relative flex min-h-0 flex-1">
-        {/* History sidebar */}
-        <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/20">
-          <div className="border-b px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            <Clock className="mr-1 inline size-3" />
-            History ({history.length})
-          </div>
-          <div className="flex-1 overflow-y-auto scrollbar-sleek">
-            {history.length === 0 ? (
-              <p className="px-3 py-4 text-center text-xs text-muted-foreground/60">
-                No runs yet. Export a workflow to capture its history.
-              </p>
-            ) : (
-              history.map((h) => (
-                <div
-                  key={h.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => void handleViewHistory(h.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      void handleViewHistory(h.id)
-                    }
-                  }}
-                  className={cn(
-                    'group flex w-full flex-col gap-1 border-b px-3 py-2 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                    selectedHistoryId === h.id && 'bg-accent'
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-medium">{h.scenarioName}</span>
-                    <span
-                      className={cn('size-2 shrink-0 rounded-full', historyRunDotClass(h.status))}
-                    />
-                  </div>
-                  <span className="text-muted-foreground">
-                    {h.completedCount}/{h.taskCount} done
-                    {h.failedCount > 0 ? `, ${h.failedCount} failed` : ''}
-                  </span>
-                  <span className="text-muted-foreground/50">
-                    {new Date(h.capturedAt).toLocaleString(undefined, {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </span>
-                  {h.agentRefs.length > 0 ? (
-                    <span className="truncate text-muted-foreground/40">
-                      {h.agentRefs.join(', ')}
-                    </span>
-                  ) : null}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="mt-0.5 size-6 self-start text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete run ${h.scenarioName}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteHistoryId(h.id)
-                    }}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
+        {/* History — collapsible rail */}
+        {historyOpen ? (
+          <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/20">
+            <div className="flex items-center gap-1.5 border-b px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <Clock className="size-3" />
+              History ({history.length})
+              {polling ? (
+                <Loader2 className="size-3 animate-spin text-muted-foreground/50" />
+              ) : null}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="ml-auto size-5"
+                onClick={() => setHistoryOpen(false)}
+                aria-label="Collapse history"
+              >
+                <ChevronLeft className="size-3.5" />
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto scrollbar-sleek">
+              {history.length === 0 ? (
+                <div className="flex flex-col items-center gap-1.5 px-3 py-10 text-center text-xs text-muted-foreground/60">
+                  <Clock className="size-6 opacity-40" />
+                  <p>No runs yet.</p>
+                  <p className="text-muted-foreground/50">
+                    Export a workflow to capture its history.
+                  </p>
                 </div>
-              ))
-            )}
-          </div>
-        </aside>
+              ) : (
+                history.map((h) => (
+                  <div
+                    key={h.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => void handleViewHistory(h.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        void handleViewHistory(h.id)
+                      }
+                    }}
+                    className={cn(
+                      'group relative flex w-full flex-col gap-0.5 border-b py-2.5 pl-3.5 pr-3 text-left text-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                      selectedHistoryId === h.id && 'bg-accent'
+                    )}
+                  >
+                    {selectedHistoryId === h.id ? (
+                      <span
+                        className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary"
+                        aria-hidden
+                      />
+                    ) : null}
+                    <div className="flex items-center gap-1.5 pr-5">
+                      <span
+                        className={cn(
+                          'size-1.5 shrink-0 rounded-full',
+                          historyRunDotClass(h.status)
+                        )}
+                      />
+                      <span className="truncate font-medium">{h.scenarioName}</span>
+                    </div>
+                    <span className="text-muted-foreground">
+                      {h.completedCount}/{h.taskCount} done
+                      {h.failedCount > 0 ? (
+                        <span className="text-red-500"> · {h.failedCount} failed</span>
+                      ) : null}
+                    </span>
+                    <span className="text-muted-foreground/50">
+                      {new Date(h.capturedAt).toLocaleString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="absolute right-1 top-1 size-5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-focus-within:opacity-100 group-hover:opacity-100"
+                      aria-label={`Delete run ${h.scenarioName}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeleteHistoryId(h.id)
+                      }}
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </aside>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            aria-label={`Show history (${history.length})`}
+            className="flex w-9 shrink-0 cursor-pointer flex-col items-center gap-2 border-r bg-muted/20 pt-2.5 text-muted-foreground transition-colors hover:bg-accent"
+          >
+            <Clock className="size-3.5" />
+            <span className="rounded-full border border-border px-1.5 text-[10px]">
+              {history.length}
+            </span>
+            <span className="mt-auto [writing-mode:vertical-rl] rotate-180 pb-2 text-[10px] uppercase tracking-widest text-muted-foreground/60">
+              History
+            </span>
+          </button>
+        )}
 
         {/* Canvas */}
         <div className="flex-1">
-          {nodes.length > 0 ? (
+          {rfNodes.length > 0 ? (
             <ReactFlow
-              nodes={nodes}
-              edges={edges}
+              nodes={rfNodes}
+              edges={rfEdges}
               nodeTypes={nodeTypes}
               onNodeClick={handleNodeClick}
+              nodesDraggable={isCompose}
+              nodesConnectable={isCompose}
+              onNodesChange={isCompose ? onDraftNodesChange : undefined}
+              onEdgesChange={isCompose ? onDraftEdgesChange : undefined}
+              onConnect={isCompose ? onConnect : undefined}
               fitView
               fitViewOptions={{ padding: 0.2 }}
               proOptions={{ hideAttribution: true }}
             >
               <Background />
-              <Controls showInteractive={false} />
+              <Controls showInteractive={isCompose} />
             </ReactFlow>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
               <WorkflowIcon className="size-12 opacity-30" />
-              <p className="text-sm">No active workflow. Select a scenario and click Run.</p>
-              <p className="text-xs text-muted-foreground/60">
-                Or use <code className="rounded bg-muted px-1">orca orchestration task-create</code>{' '}
-                to add tasks via CLI.
-              </p>
+              {isCompose ? (
+                <>
+                  <p className="text-sm">
+                    Compose a workflow: add nodes, drag to arrange, connect to set order.
+                  </p>
+                  <p className="text-xs text-muted-foreground/60">
+                    Use <strong>Nodes</strong> to add templates, <strong>Import</strong> a scenario
+                    YAML, then <strong>Run</strong>.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm">
+                    No active workflow. Select a scenario and click Run, or open History.
+                  </p>
+                  <p className="text-xs text-muted-foreground/60">
+                    Or use{' '}
+                    <code className="rounded bg-muted px-1">orca orchestration task-create</code> to
+                    add tasks via CLI.
+                  </p>
+                </>
+              )}
             </div>
           )}
         </div>
 
-        {/* Right-side detail/nodes panel as a single edge-sliding Sheet. */}
+        {/* Right-side panel as a single edge-sliding Sheet; width varies by mode. */}
         <Sheet
           open={sidePanel !== null}
           onOpenChange={(o) => {
@@ -553,7 +939,13 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             }
           }}
         >
-          <SheetContent side="right" className="flex flex-col gap-0 p-0">
+          <SheetContent
+            side="right"
+            className={cn(
+              'flex flex-col gap-0 p-0',
+              sidePanel === 'nodes' ? 'sm:max-w-[720px]' : 'sm:max-w-[420px]'
+            )}
+          >
             <SheetHeader className="flex flex-row items-center justify-between space-y-0 border-b px-4 py-2.5">
               <SheetTitle className="truncate text-sm">
                 {sidePanel === 'task'
@@ -561,12 +953,17 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
                   : 'Workflow Nodes'}
               </SheetTitle>
             </SheetHeader>
-            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-sleek">
+            <div className="min-h-0 flex-1 overflow-hidden">
               {sidePanel === 'task' && selectedTask ? (
-                <TaskDetailBody task={selectedTask} agent={selectedAgent} yaml={agentYaml} />
+                <NodeTemplateView name={selectedAgent} yaml={nodeTemplateYaml} />
               ) : null}
               {sidePanel === 'nodes' ? (
-                <WorkflowNodesEditorSheet open onAddedToCanvas={() => void pollTasks()} />
+                <WorkflowNodesEditorSheet
+                  open
+                  composeMode={isCompose}
+                  onDraftAdd={addDraftNode}
+                  onAddedToCanvas={() => void pollTasks()}
+                />
               ) : null}
             </div>
           </SheetContent>
@@ -592,55 +989,35 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   )
 }
 
-function TaskDetailBody({
-  task,
-  agent,
+function NodeTemplateView({
+  name,
   yaml
 }: {
-  task: OrchestrationTask
-  agent: string | null
-  yaml: string | null
+  name: string | null
+  yaml: string | null | undefined
 }): React.JSX.Element {
-  const deps = safeParseDeps(task.deps)
-  const strippedSpec = decodeAssigneeFromSpec(task.spec).strippedSpec
-  return (
-    <div className="flex flex-col">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 p-4 text-sm">
-        <dt className="text-muted-foreground">Status</dt>
-        <dd className="font-medium">{task.status}</dd>
-        <dt className="text-muted-foreground">Assignee</dt>
-        <dd className="font-medium">
-          {agent ?? <span className="text-muted-foreground">no assignee</span>}
-        </dd>
-        {deps.length > 0 ? (
-          <>
-            <dt className="text-muted-foreground">Deps</dt>
-            <dd className="font-mono text-xs">{deps.join(', ')}</dd>
-          </>
-        ) : null}
-        <dt className="text-muted-foreground">Spec</dt>
-        <dd>
-          <pre className="whitespace-pre-wrap break-words rounded bg-muted/40 p-2 font-mono text-xs">
-            {strippedSpec}
-          </pre>
-        </dd>
-      </dl>
-      {agent ? (
-        <div className="border-t">
-          <div className="px-4 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Agent YAML — {agent}
-          </div>
-          {yaml !== null ? (
-            <div className="h-[360px] px-4 pb-4">
-              <YamlEditor value={yaml} onChange={() => {}} readOnly placeholder="No saved YAML" />
-            </div>
-          ) : (
-            <p className="px-4 pb-4 text-xs text-muted-foreground">
-              No saved YAML for agent &quot;{agent}&quot;.
-            </p>
-          )}
+  if (typeof yaml === 'string') {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex items-center gap-2 border-b px-4 py-2.5">
+          <span className="text-sm font-semibold">{name}</span>
+          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+            node
+          </Badge>
+          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+            read-only
+          </Badge>
         </div>
-      ) : null}
+        <div className="min-h-0 flex-1">
+          <YamlEditor value={yaml} onChange={() => {}} readOnly placeholder="No node YAML" />
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-xs text-muted-foreground/60">
+      <Blocks className="size-8 opacity-30" />
+      <p>{name ? `No workflow node for &quot;${name}&quot;.` : 'This task has no assignee.'}</p>
     </div>
   )
 }

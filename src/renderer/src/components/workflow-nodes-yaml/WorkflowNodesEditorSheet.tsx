@@ -9,7 +9,6 @@ import {
   Trash2
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { callRuntimeRpc } from '@/runtime/runtime-rpc-client'
@@ -48,9 +47,13 @@ spec:
  */
 export function WorkflowNodesEditorSheet({
   open,
+  composeMode = false,
+  onDraftAdd,
   onAddedToCanvas
 }: {
   open: boolean
+  composeMode?: boolean
+  onDraftAdd?: (record: { name: string; displayName: string }) => void
   onAddedToCanvas?: () => void
 }) {
   const settings = useAppStore((s) => s.settings)
@@ -164,6 +167,10 @@ export function WorkflowNodesEditorSheet({
     if (!node) {
       return
     }
+    if (composeMode && onDraftAdd) {
+      onDraftAdd({ name: node.name, displayName: node.displayName })
+      return
+    }
     try {
       const target = getActiveRuntimeTarget(settings)
       const spec = `assignee: ${node.name}\n${node.role}`
@@ -199,17 +206,14 @@ export function WorkflowNodesEditorSheet({
 
   return (
     <div className="flex h-full w-full flex-col">
-      <div className="flex flex-row items-center gap-2 border-b px-4 py-2.5">
-        <Badge variant="outline">YAML</Badge>
-        <span className="text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 px-4 py-2">
+        <span className="text-xs text-muted-foreground">
           {nodes.length} node{nodes.length === 1 ? '' : 's'}
         </span>
-        <div className="ml-auto flex items-center gap-1">
-          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="mr-1.5 size-3.5" />
-            New
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
+          <Plus className="mr-1.5 size-3.5" />
+          New
+        </Button>
       </div>
 
       <div className="flex min-h-0 flex-1">
