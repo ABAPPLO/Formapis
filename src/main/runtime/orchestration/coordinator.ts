@@ -334,11 +334,11 @@ export class Coordinator {
       this.opts.onLog(`Task ${taskId} circuit broken after repeated failures`)
       this.db.updateTaskStatus(taskId, 'failed', `Circuit broken: ${msg.subject}`)
       this.state.failedTasks.push(taskId)
-      // Why: task is terminal — release the worker terminal the manager spawned for it.
-      await this.releaseDispatchTerminal(dispatch.id)
     } else {
       this.opts.onLog(`Task ${taskId} will be retried (failure ${updated?.failure_count ?? 0}/3)`)
     }
+    // Why: release on every failDispatch — the escalation ended this attempt; a retry acquires a fresh terminal (one-task-one-terminal).
+    await this.releaseDispatchTerminal(dispatch.id)
   }
 
   private handleDecisionGateMessage(msg: MessageRow): void {
@@ -399,6 +399,7 @@ export class Coordinator {
     let terminals = await this.getAvailableTerminals()
 
     for (const task of readyTasks) {
+      // Why: only the slot budget gates the loop — an assignee-bearing task spawns its own terminal via the manager, so an empty free-pool must not break early (the no-assignee path falls through to `if (!match) break`).
       if (slotsAvailable <= 0) {
         break
       }
@@ -512,9 +513,9 @@ export class Coordinator {
       )
       if (updated?.status === 'circuit_broken') {
         this.state.failedTasks.push(task.id)
-        // Why: dispatch is terminal — release the worker terminal the manager spawned for it.
-        await this.releaseDispatchTerminal(dispatch.id)
       }
+      // Why: release on every failDispatch — a retryable failure still ends this attempt's terminal; the retry acquires a fresh one (one-task-one-terminal).
+      await this.releaseDispatchTerminal(dispatch.id)
       throw err
     }
 

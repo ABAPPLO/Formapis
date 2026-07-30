@@ -35,6 +35,9 @@ function makeCoordinator(
   return new Coordinator(db, runtime, opts)
 }
 
+// Why: collapse the noisy `new Promise((r) => setTimeout(r, ms))` wait into one helper.
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
 type DriftResult = {
   base: string
   behind: number
@@ -174,9 +177,7 @@ describe('Coordinator', () => {
     const runPromise = coordinator.run()
 
     // Wait for dispatch to happen
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
 
     // Simulate the worker completing
     insertWorkerDone(db, { taskId: task.id, filesModified: ['a.ts'] })
@@ -203,9 +204,7 @@ describe('Coordinator', () => {
       pollIntervalMs: 50
     })
     const runPromise = coordinator.run()
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
 
     expect(db.getDispatchContext(task.id)?.assignee_pane_key).toBe('tab_a:leaf_a')
 
@@ -292,7 +291,7 @@ describe('Coordinator', () => {
     })
 
     const runPromise = coordinator.run()
-    await new Promise((r) => setTimeout(r, 100))
+    await wait(100)
 
     // Why: routing goes through the manager's spawnAgentTerminal, not the legacy createTerminal path.
     expect(runtime.spawnAgentTerminal).toHaveBeenCalledWith(undefined, payload('codex'))
@@ -322,7 +321,7 @@ describe('Coordinator', () => {
     })
 
     const runPromise = coordinator.run()
-    await new Promise((r) => setTimeout(r, 100))
+    await wait(100)
 
     expect(db.getTask(task.id)?.resolved_agent).toBe('gemini')
     expect(runtime.spawnAgentTerminal).toHaveBeenCalled()
@@ -357,6 +356,41 @@ describe('Coordinator', () => {
     expect(runtime.spawnAgentTerminal).not.toHaveBeenCalled()
   })
 
+  it('releases the spawned terminal on a retryable dispatch failure', async () => {
+    db = new OrchestrationDb(':memory:')
+    const runtime = createMockRuntime()
+    const manager = new AgentWorkerManager(runtime, '/nonexistent-home')
+    vi.spyOn(manager, 'resolve').mockReturnValue(payload('codex'))
+    const task = db.createTask({ spec: 'assignee: codex\nwork' })
+    const coordinator = new Coordinator(db, runtime, {
+      spec: 'go',
+      coordinatorHandle: 'coord',
+      pollIntervalMs: 20,
+      agentWorkerManager: manager
+    })
+
+    const runPromise = coordinator.run()
+    await wait(80)
+    expect(runtime.spawnAgentTerminal).toHaveBeenCalled()
+
+    // Why: one escalation → failure_count 1 (retryable, not circuit-broken); task returns to 'ready'.
+    db.insertMessage({
+      from: 'term_spawned',
+      to: 'coord',
+      subject: 'stuck',
+      type: 'escalation',
+      payload: JSON.stringify({ taskId: task.id })
+    })
+    await wait(80)
+
+    // Why: the failed attempt's terminal is released even though the task will retry.
+    expect(runtime.closeTerminal).toHaveBeenCalledWith('term_spawned')
+    expect(db.getTask(task.id)?.status).not.toBe('failed')
+
+    coordinator.stop()
+    await runPromise
+  })
+
   it('handles escalation and circuit breaker', async () => {
     db = new OrchestrationDb(':memory:')
     const runtime = createMockRuntime()
@@ -377,9 +411,7 @@ describe('Coordinator', () => {
 
     // Send 3 escalations to trigger circuit breaker
     for (let i = 0; i < 3; i++) {
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
       db.insertMessage({
         from: `term_${i === 0 ? 'a' : 'b'}`,
         to: 'coord',
@@ -432,9 +464,7 @@ describe('Coordinator', () => {
     const runPromise = coordinator.run()
 
     // Wait for dispatch
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
 
     // Worker sends decision gate
     db.insertMessage({
@@ -449,9 +479,7 @@ describe('Coordinator', () => {
       })
     })
 
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
 
     // Verify task is blocked
     const blocked = db.getTask(task.id)
@@ -464,9 +492,7 @@ describe('Coordinator', () => {
     db.resolveGate(gates[0].id, 'yes')
 
     // Wait for re-dispatch and simulate completion
-    await new Promise((r) => {
-      setTimeout(r, 200)
-    })
+    await wait(200)
 
     insertWorkerDone(db, { taskId: task.id })
 
@@ -494,9 +520,7 @@ describe('Coordinator', () => {
     const runPromise = coordinator.run()
 
     // Wait for t1 dispatch
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
 
     // t2 should still be pending
     expect(db.getTask(t2.id)?.status).toBe('pending')
@@ -505,9 +529,7 @@ describe('Coordinator', () => {
     insertWorkerDone(db, { taskId: t1.id })
 
     // Wait for t2 to be promoted and dispatched
-    await new Promise((r) => {
-      setTimeout(r, 200)
-    })
+    await wait(200)
 
     // t2 should now be dispatched
     const t2Status = db.getTask(t2.id)?.status
@@ -544,9 +566,7 @@ describe('Coordinator', () => {
 
     const runPromise = coordinator.run()
 
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
 
     // Only 2 should be dispatched
     const dispatched = db.listTasks({ status: 'dispatched' })
@@ -555,9 +575,7 @@ describe('Coordinator', () => {
     // Complete all tasks
     for (const task of [t1, t2, t3]) {
       insertWorkerDone(db, { taskId: task.id })
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
     }
 
     const result = await runPromise
@@ -592,9 +610,7 @@ describe('Coordinator', () => {
 
     // Drive one tick then stop — we only need the stale warning to have fired.
     const runPromise = coordinator.run()
-    await new Promise((r) => {
-      setTimeout(r, 80)
-    })
+    await wait(80)
     coordinator.stop()
     await runPromise
 
@@ -627,9 +643,7 @@ describe('Coordinator', () => {
       payload: JSON.stringify({ taskId: task.id, dispatchId: ctx.id, phase: 'implementing' })
     })
 
-    await new Promise((r) => {
-      setTimeout(r, 80)
-    })
+    await wait(80)
 
     expect(db.getDispatchContext(task.id)?.last_heartbeat_at).toBeTruthy()
 
@@ -665,9 +679,7 @@ describe('Coordinator', () => {
       onLog: (m) => logs.push(m)
     })
     const staleRun = staleCoordinator.run()
-    await new Promise((r) => {
-      setTimeout(r, 80)
-    })
+    await wait(80)
     staleCoordinator.stop()
     await staleRun
 
@@ -738,9 +750,7 @@ describe('Coordinator', () => {
 
     const runPromise = coordinator.run()
 
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    await wait(100)
     coordinator.stop()
 
     const result = await runPromise
@@ -768,9 +778,7 @@ describe('Coordinator', () => {
       })
 
       const runPromise = coordinator.run()
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
 
       insertWorkerDone(db, { taskId: task.id })
 
@@ -804,9 +812,7 @@ describe('Coordinator', () => {
       })
 
       const runPromise = coordinator.run()
-      await new Promise((r) => {
-        setTimeout(r, 250)
-      })
+      await wait(250)
       coordinator.stop()
       const result = await runPromise
 
@@ -844,9 +850,7 @@ allow-stale-base: true`
       })
 
       const runPromise = coordinator.run()
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
 
       insertWorkerDone(db, { taskId: task.id })
 
@@ -877,9 +881,7 @@ allow-stale-base: true`
       })
 
       const runPromise = coordinator.run()
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
 
       insertWorkerDone(db, { taskId: task.id })
 
@@ -907,9 +909,7 @@ allow-stale-base: true`
       })
 
       const runPromise = coordinator.run()
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
 
       insertWorkerDone(db, { taskId: task.id })
 
@@ -937,9 +937,7 @@ allow-stale-base: true`
       })
 
       const runPromise = coordinator.run()
-      await new Promise((r) => {
-        setTimeout(r, 100)
-      })
+      await wait(100)
 
       insertWorkerDone(db, { taskId: task.id })
 
