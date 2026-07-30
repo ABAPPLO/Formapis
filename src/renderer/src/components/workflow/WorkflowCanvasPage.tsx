@@ -103,6 +103,10 @@ type OrchestrationTask = {
   status: 'pending' | 'ready' | 'dispatched' | 'completed' | 'failed' | 'blocked'
   deps: string
   assignee_handle?: string | null
+  // From orchestration.taskList (Task 7): the agent the coordinator actually
+  // dispatched to, and any per-task dispatch failure reason.
+  resolved_agent?: string | null
+  dispatch_error?: string | null
 }
 
 type SidePanelMode = 'task' | 'nodes' | null
@@ -251,7 +255,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
     try {
       const result = await window.api.scenarios.launch(selectedScenario)
       if (!result.ok) {
-        toast.error('Launch failed', { description: result.error })
+        toastLaunchFailure(result)
         return
       }
       const target = getActiveRuntimeTarget(settings)
@@ -332,7 +336,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       await window.api.scenarios.save(name, yaml)
       const result = await window.api.scenarios.launch(name)
       if (!result.ok) {
-        toast.error('Launch failed', { description: result.error })
+        toastLaunchFailure(result)
         return
       }
       const target = getActiveRuntimeTarget(settings)
@@ -719,7 +723,8 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       const { assignee, strippedSpec } = decodeAssigneeFromSpec(t.spec)
       const data: TaskNodeData = {
         label: t.task_title || t.id,
-        assignee: assignee ?? 'unknown',
+        // Prefer the coordinator's resolved agent over the spec-encoded assignee.
+        assignee: t.resolved_agent ?? assignee ?? 'unknown',
         status: t.status,
         specSummary: strippedSpec.slice(0, 80)
       }
@@ -1314,7 +1319,11 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
                     }}
                   />
                 ) : (
-                  <NodeTemplateView name={selectedAgent} yaml={nodeTemplateYaml} />
+                  <NodeTemplateView
+                    name={selectedAgent}
+                    yaml={nodeTemplateYaml}
+                    task={selectedTask}
+                  />
                 )
               ) : null}
               {sidePanel === 'nodes' ? (
@@ -1405,33 +1414,50 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
 
 function NodeTemplateView({
   name,
-  yaml
+  yaml,
+  task
 }: {
   name: string | null
   yaml: string | null | undefined
+  task: OrchestrationTask | null
 }): React.JSX.Element {
-  if (typeof yaml === 'string') {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="flex items-center gap-2 border-b px-4 py-2.5">
-          <span className="text-sm font-semibold">{name}</span>
-          <Badge variant="outline" className="text-[10px] text-muted-foreground">
-            node
-          </Badge>
-          <Badge variant="outline" className="text-[10px] text-muted-foreground">
-            read-only
-          </Badge>
-        </div>
-        <div className="min-h-0 flex-1">
-          <YamlEditor value={yaml} onChange={() => {}} readOnly placeholder="No node YAML" />
-        </div>
-      </div>
-    )
-  }
+  // Resolved agent = what the coordinator actually dispatched to, falling back
+  // to the spec-encoded assignee, then 'unknown'.
+  const resolvedAgent =
+    task?.resolved_agent ?? decodeAssigneeFromSpec(task?.spec ?? '').assignee ?? null
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-xs text-muted-foreground/60">
-      <Blocks className="size-8 opacity-30" />
-      <p>{name ? `No workflow node for &quot;${name}&quot;.` : 'This task has no assignee.'}</p>
+    <div className="flex h-full flex-col">
+      {/* Monitor task dispatch meta: actual agent + any per-task failure. */}
+      {task ? (
+        <div className="flex flex-col gap-1 border-b px-4 py-2 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-muted-foreground">Dispatched agent</span>
+            <span className="font-medium text-foreground">{resolvedAgent ?? 'unknown'}</span>
+          </div>
+          {task.dispatch_error ? <p className="text-destructive">{task.dispatch_error}</p> : null}
+        </div>
+      ) : null}
+      {typeof yaml === 'string' ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 border-b px-4 py-2.5">
+            <span className="text-sm font-semibold">{name}</span>
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+              node
+            </Badge>
+            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+              read-only
+            </Badge>
+          </div>
+          <div className="min-h-0 flex-1">
+            <YamlEditor value={yaml} onChange={() => {}} readOnly placeholder="No node YAML" />
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-xs text-muted-foreground/60">
+          <Blocks className="size-8 opacity-30" />
+          <p>{name ? `No workflow node for &quot;${name}&quot;.` : 'This task has no assignee.'}</p>
+        </div>
+      )}
     </div>
   )
 }
@@ -1585,4 +1611,16 @@ function safeParseDeps(depsJson: string): string[] {
     // fall through
   }
   return []
+}
+
+// Why: unknown-assignee refusal is actionable (register the agent first), so
+// surface it distinctly from a generic launch error.
+function toastLaunchFailure(result: { error: string; unknownAssignees?: string[] }): void {
+  if (result.unknownAssignees && result.unknownAssignees.length > 0) {
+    toast.error('Scenario not started', {
+      description: `Unknown agent(s): ${result.unknownAssignees.join(', ')}`
+    })
+  } else {
+    toast.error('Launch failed', { description: result.error })
+  }
 }
