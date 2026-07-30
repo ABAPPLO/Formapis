@@ -470,6 +470,11 @@ export class Coordinator {
             `in the task spec to override. Task remains in 'ready'; coordinator ` +
             `will retry on the next tick.`
         )
+        // Why: no dispatch context is created on a stale-base skip, so releaseDispatchTerminal (context-keyed) can't find this handle — release the just-spawned terminal directly so retries don't orphan a live terminal each tick.
+        if (this.acquiredHandles.has(targetHandle)) {
+          this.acquiredHandles.delete(targetHandle)
+          await this.opts.agentWorkerManager.release(targetHandle)
+        }
         return
       }
     }

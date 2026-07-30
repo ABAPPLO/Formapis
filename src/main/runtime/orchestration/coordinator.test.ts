@@ -295,6 +295,7 @@ describe('Coordinator', () => {
 
     // Why: routing goes through the manager's spawnAgentTerminal, not the legacy createTerminal path.
     expect(runtime.spawnAgentTerminal).toHaveBeenCalledWith(undefined, payload('codex'))
+    expect(db.getTask(task.id)?.resolved_agent).toBe('codex')
 
     // Complete the task from the spawned handle
     insertWorkerDone(db, { taskId: task.id, from: 'term_spawned' })
@@ -303,32 +304,6 @@ describe('Coordinator', () => {
     expect(result.status).toBe('completed')
     // Why: one-task-one-terminal teardown — the spawned worker is released on completion.
     expect(runtime.closeTerminal).toHaveBeenCalledWith('term_spawned')
-  })
-
-  it('records the resolved agent when an assignee is known and dispatches via the manager', async () => {
-    db = new OrchestrationDb(':memory:')
-    const runtime = createMockRuntime()
-    const manager = new AgentWorkerManager(runtime, '/nonexistent-home')
-    vi.spyOn(manager, 'resolve').mockReturnValue(payload('gemini'))
-
-    const task = db.createTask({ spec: 'assignee: gemini\nwork' })
-
-    const coordinator = new Coordinator(db, runtime, {
-      spec: 'go',
-      coordinatorHandle: 'coord',
-      pollIntervalMs: 50,
-      agentWorkerManager: manager
-    })
-
-    const runPromise = coordinator.run()
-    await wait(100)
-
-    expect(db.getTask(task.id)?.resolved_agent).toBe('gemini')
-    expect(runtime.spawnAgentTerminal).toHaveBeenCalled()
-
-    insertWorkerDone(db, { taskId: task.id, from: 'term_spawned' })
-    const result = await runPromise
-    expect(result.status).toBe('completed')
   })
 
   it('fails a ready task fast when its assignee agent is unknown', async () => {
@@ -389,6 +364,40 @@ describe('Coordinator', () => {
 
     coordinator.stop()
     await runPromise
+  })
+
+  it('releases the spawned terminal when a stale-base skip aborts dispatch', async () => {
+    db = new OrchestrationDb(':memory:')
+    const runtime = createMockRuntime()
+    runtime.setProbeDrift({
+      base: 'origin/main',
+      behind: DISPATCH_STALE_THRESHOLD + 5,
+      recentSubjects: ['stale commit']
+    })
+    const manager = new AgentWorkerManager(runtime, '/nonexistent-home')
+    vi.spyOn(manager, 'resolve').mockReturnValue(payload('codex'))
+    const task = db.createTask({ spec: 'assignee: codex\ndo work' })
+    const coordinator = new Coordinator(db, runtime, {
+      spec: 'go',
+      coordinatorHandle: 'coord',
+      pollIntervalMs: 20,
+      worktree: 'wt1',
+      agentWorkerManager: manager
+    })
+
+    const runPromise = coordinator.run()
+    try {
+      await wait(80)
+      // Why: stale-base guard aborts dispatch before any prompt; the spawned terminal must be released, not orphaned for retries to replace each tick.
+      expect(runtime.spawnAgentTerminal).toHaveBeenCalled()
+      expect(runtime.closeTerminal).toHaveBeenCalledWith('term_spawned')
+      expect(db.getTask(task.id)?.status).toBe('ready')
+      expect(db.getDispatchContext(task.id)).toBeUndefined()
+    } finally {
+      // Why: stop+await even on assertion failure so the background loop can't touch the db after afterEach closes it.
+      coordinator.stop()
+      await runPromise
+    }
   })
 
   it('handles escalation and circuit breaker', async () => {
