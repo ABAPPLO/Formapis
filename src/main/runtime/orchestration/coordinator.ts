@@ -4,6 +4,7 @@ import type { MessageRow, TaskRow, CoordinatorStatus } from './types'
 import type { AgentLaunchPayload } from '../../../shared/agent-yaml'
 import { buildDispatchPreamble } from './preamble'
 import { reconcileLifecycleMessage } from './lifecycle-reconciliation'
+import type { AgentWorkerManager } from './agent-worker-manager'
 
 export type CoordinatorRuntime = {
   sendTerminalAgentPrompt(handle: string, prompt: string): Promise<unknown>
@@ -92,6 +93,8 @@ export type CoordinatorOptions = {
   maxConcurrent?: number
   worktree?: string
   onLog?: (msg: string) => void
+  // Why: owns per-task worker terminals (resolve → spawn → close); the coordinator routes assignee-bearing tasks through it.
+  agentWorkerManager: AgentWorkerManager
 }
 
 type CoordinatorState = {
@@ -113,6 +116,8 @@ export class Coordinator {
   private runtime: CoordinatorRuntime
   private state: CoordinatorState
   private stopped = false
+  // Why: tracks handles the manager spawned (assignee-bearing acquires) so only those terminals are torn down on dispatch end; legacy pool terminals stay.
+  private acquiredHandles = new Set<string>()
   private opts: Required<Omit<CoordinatorOptions, 'onLog' | 'worktree'>> & {
     onLog: (msg: string) => void
     worktree?: string
@@ -122,6 +127,7 @@ export class Coordinator {
     this.db = db
     this.runtime = runtime
     this.opts = {
+      agentWorkerManager: options.agentWorkerManager,
       spec: options.spec,
       coordinatorHandle: options.coordinatorHandle,
       pollIntervalMs: options.pollIntervalMs ?? DEFAULT_POLL_MS,
@@ -230,7 +236,7 @@ export class Coordinator {
   }
 
   private async tick(): Promise<boolean> {
-    this.processMessages()
+    await this.processMessages()
     this.processEscalations()
     this.processDecisionGates()
     this.warnStaleDispatches()
@@ -250,7 +256,7 @@ export class Coordinator {
     }
   }
 
-  private processMessages(): void {
+  private async processMessages(): Promise<void> {
     const messages = this.db.getUnreadMessages(this.opts.coordinatorHandle)
     if (messages.length === 0) {
       return
@@ -259,16 +265,16 @@ export class Coordinator {
     for (const msg of messages) {
       switch (msg.type) {
         case 'worker_done':
-          this.handleLifecycleMessage(msg)
+          await this.handleLifecycleMessage(msg)
           break
         case 'escalation':
-          this.handleEscalation(msg)
+          await this.handleEscalation(msg)
           break
         case 'decision_gate':
           this.handleDecisionGateMessage(msg)
           break
         case 'heartbeat':
-          this.handleLifecycleMessage(msg)
+          await this.handleLifecycleMessage(msg)
           break
         case 'status':
           this.opts.onLog(`Status from ${msg.from_handle}: ${msg.subject}`)
@@ -283,16 +289,18 @@ export class Coordinator {
     this.db.markAsRead(messages.map((m) => m.id))
   }
 
-  private handleLifecycleMessage(msg: MessageRow): void {
+  private async handleLifecycleMessage(msg: MessageRow): Promise<void> {
     const result = reconcileLifecycleMessage(this.db, msg, this.opts.onLog)
     if (result.action === 'completed') {
       if (!this.state.completedTasks.includes(result.taskId)) {
         this.state.completedTasks.push(result.taskId)
       }
+      // Why: one-task-one-terminal teardown — close the worker the manager spawned when its dispatch completes.
+      await this.releaseDispatchTerminal(result.dispatchId)
     }
   }
 
-  private handleEscalation(msg: MessageRow): void {
+  private async handleEscalation(msg: MessageRow): Promise<void> {
     this.opts.onLog(`Escalation from ${msg.from_handle}: ${msg.subject}`)
     this.state.escalations.push(msg)
 
@@ -326,6 +334,8 @@ export class Coordinator {
       this.opts.onLog(`Task ${taskId} circuit broken after repeated failures`)
       this.db.updateTaskStatus(taskId, 'failed', `Circuit broken: ${msg.subject}`)
       this.state.failedTasks.push(taskId)
+      // Why: task is terminal — release the worker terminal the manager spawned for it.
+      await this.releaseDispatchTerminal(dispatch.id)
     } else {
       this.opts.onLog(`Task ${taskId} will be retried (failure ${updated?.failure_count ?? 0}/3)`)
     }
@@ -389,62 +399,45 @@ export class Coordinator {
     let terminals = await this.getAvailableTerminals()
 
     for (const task of readyTasks) {
-      if (slotsAvailable <= 0 || terminals.length === 0) {
+      if (slotsAvailable <= 0) {
         break
       }
 
       const { assignee } = parseAssigneeFromSpec(task.spec)
-      // Why: prefer a terminal already running the declared agent; fall back to any
-      // free terminal when no assignee is set or no matching terminal exists yet.
-      let match = assignee ? terminals.find((t) => t.agentType === assignee) : undefined
-      if (!match) {
-        match = terminals.find((t) => t.agentType === null) ?? terminals[0]
-      }
+      const acquired = assignee
+        ? await this.opts.agentWorkerManager.acquire(this.opts.worktree, assignee)
+        : null
 
-      // Why: if the desired agent has no terminal yet and the runtime supports
-      // launching agents, create one (at most one per tick) instead of giving up.
-      if (!match && assignee && slotsAvailable > 0) {
-        try {
-          const created = await this.runtime.createTerminal(this.opts.worktree, {
-            title: `Worker (${assignee}): ${task.spec.slice(0, 40)}`,
-            ...(this.runtime.getTerminalAgentType
-              ? { command: this.resolveAgentLaunchCommand(assignee) }
-              : {})
-          })
-          match = { handle: created.handle, agentType: assignee }
-          this.opts.onLog(`Created worker terminal ${created.handle} for agent ${assignee}`)
-        } catch (err) {
-          this.opts.onLog(`Failed to create terminal for ${assignee}: ${err}`)
-          continue
-        }
+      // Why: no assignee → keep legacy behavior of using a free existing terminal; an
+      // assigned task with no resolvable/launchable agent fails fast instead of misrouting.
+      let match: { handle: string } | undefined
+      if (acquired?.ok) {
+        match = { handle: acquired.handle }
+        this.acquiredHandles.add(acquired.handle)
+        this.db.recordTaskResolvedAgent(task.id, acquired.agentName)
+      } else if (assignee && acquired && !acquired.ok) {
+        this.db.recordTaskDispatchError(task.id, acquired.message)
+        this.db.updateTaskStatus(task.id, 'failed')
+        this.opts.onLog(`Task ${task.id} dispatch failed: ${acquired.message}`)
+        continue
+      } else if (terminals.length > 0) {
+        const free = terminals.find((t) => t.agentType === null) ?? terminals[0]
+        match = { handle: free.handle }
       }
 
       if (!match) {
-        // No terminal available and none could be created; stop this tick.
         break
       }
-
-      terminals = terminals.filter((t) => t.handle !== match!.handle)
+      const matchedHandle = match.handle
+      terminals = terminals.filter((t) => t.handle !== matchedHandle)
       slotsAvailable--
 
       try {
-        await this.dispatchTask(task, match.handle)
+        await this.dispatchTask(task, matchedHandle)
       } catch (err) {
         this.opts.onLog(`Failed to dispatch task ${task.id}: ${err}`)
       }
     }
-  }
-
-  /**
-   * Best-effort launch command for a known agent type. The runtime's
-   * createTerminal honors `command` to spawn the agent CLI directly so the
-   * terminal is ready to receive a dispatch prompt.
-   */
-  private resolveAgentLaunchCommand(agentType: string): string | undefined {
-    // Why: the canonical launch command is the agent's CLI name; the runtime
-    // resolves PATH/platform specifics. Unknown agents return undefined so
-    // createTerminal opens a bare shell (the dispatch prompt still works).
-    return agentType
   }
 
   private async dispatchTask(task: TaskRow, targetHandle: string): Promise<void> {
@@ -519,12 +512,24 @@ export class Coordinator {
       )
       if (updated?.status === 'circuit_broken') {
         this.state.failedTasks.push(task.id)
+        // Why: dispatch is terminal — release the worker terminal the manager spawned for it.
+        await this.releaseDispatchTerminal(dispatch.id)
       }
       throw err
     }
 
     this.opts.onLog(`Dispatched task ${task.id} to ${targetHandle}`)
     this.state.phase = 'monitoring'
+  }
+
+  // Why: releases a worker terminal the manager spawned once its dispatch reaches a terminal state; legacy pool terminals (absent from acquiredHandles) are left running.
+  private async releaseDispatchTerminal(dispatchId: string): Promise<void> {
+    const ctx = this.db.getDispatchContextById(dispatchId)
+    const handle = ctx?.assignee_handle
+    if (handle && this.acquiredHandles.has(handle)) {
+      this.acquiredHandles.delete(handle)
+      await this.opts.agentWorkerManager.release(handle)
+    }
   }
 
   private async getAvailableTerminals(): Promise<{ handle: string; agentType: string | null }[]> {

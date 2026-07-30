@@ -1,8 +1,10 @@
+import { homedir } from 'node:os'
 import { z } from 'zod'
 import { defineMethod, type RpcMethod } from '../core'
 import { OptionalFiniteNumber, OptionalString, requiredString } from '../schemas'
 import type { GateStatus } from '../../orchestration/db'
 import { Coordinator } from '../../orchestration/coordinator'
+import { AgentWorkerManager } from '../../orchestration/agent-worker-manager'
 
 // Why: the coordinator instance is stored at module scope so orchestration.runStop
 // can signal it to halt. Only one coordinator can run at a time (enforced by
@@ -57,7 +59,9 @@ export const ORCHESTRATION_GATE_METHODS: RpcMethod[] = [
         coordinatorHandle,
         pollIntervalMs: params.pollIntervalMs,
         maxConcurrent: params.maxConcurrent,
-        worktree: params.worktree
+        worktree: params.worktree,
+        // Why: production worker lifecycle owner — resolves agent YAML and spawns/closes worker terminals.
+        agentWorkerManager: new AgentWorkerManager(runtime, homedir())
       })
 
       activeCoordinator = coordinator

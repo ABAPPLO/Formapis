@@ -6,8 +6,34 @@ import {
   Coordinator,
   DISPATCH_STALE_THRESHOLD,
   parseAllowStaleBaseFromSpec,
+  type CoordinatorOptions,
   type CoordinatorRuntime
 } from './coordinator'
+import { AgentWorkerManager } from './agent-worker-manager'
+
+const payload = (name: string): AgentLaunchPayload => ({
+  provider: 'claude',
+  runtimeType: undefined,
+  systemPrompt: `prompt for ${name}`,
+  initialMessage: `prompt for ${name}`,
+  displayName: name,
+  tools: { mcp: [], skills: [], plugins: [] }
+})
+
+// Why: every Coordinator needs an AgentWorkerManager now; this injects one over the
+// mock runtime so non-assignee tests stay unchanged. Assignee-bearing tests build
+// their own manager so they can stub `resolve`.
+function makeCoordinator(
+  db: OrchestrationDb,
+  runtime: CoordinatorRuntime,
+  options: Omit<CoordinatorOptions, 'agentWorkerManager'>
+): Coordinator {
+  const opts: CoordinatorOptions = {
+    ...options,
+    agentWorkerManager: new AgentWorkerManager(runtime, '/nonexistent-home')
+  }
+  return new Coordinator(db, runtime, opts)
+}
 
 type DriftResult = {
   base: string
@@ -122,7 +148,7 @@ describe('Coordinator', () => {
   it('throws if no tasks exist', async () => {
     db = new OrchestrationDb(':memory:')
     const runtime = createMockRuntime()
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'do stuff',
       coordinatorHandle: 'coord'
     })
@@ -138,7 +164,7 @@ describe('Coordinator', () => {
     const task = db.createTask({ spec: 'implement feature' })
 
     // Simulate worker_done arriving after dispatch
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'build it',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50
@@ -171,7 +197,7 @@ describe('Coordinator', () => {
     })
 
     const task = db.createTask({ spec: 'implement feature' })
-    const coordinator = new Coordinator(db, withPaneLookup, {
+    const coordinator = makeCoordinator(db, withPaneLookup, {
       spec: 'build it',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50
@@ -203,7 +229,7 @@ describe('Coordinator', () => {
 
     reconcileLifecycleMessage(db, msg)
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20
@@ -238,7 +264,7 @@ describe('Coordinator', () => {
 
     reconcileLifecycleMessage(db, first)
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20
@@ -252,29 +278,83 @@ describe('Coordinator', () => {
   it('creates a terminal when none are available', async () => {
     db = new OrchestrationDb(':memory:')
     const runtime = createMockRuntime()
+    // Why: an assignee-bearing task spawns a worker terminal via the manager even when no free terminal exists.
+    const manager = new AgentWorkerManager(runtime, '/nonexistent-home')
+    vi.spyOn(manager, 'resolve').mockReturnValue(payload('codex'))
 
-    const task = db.createTask({ spec: 'work' })
+    const task = db.createTask({ spec: 'assignee: codex\nwork' })
 
     const coordinator = new Coordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
-      pollIntervalMs: 50
+      pollIntervalMs: 50,
+      agentWorkerManager: manager
     })
 
     const runPromise = coordinator.run()
+    await new Promise((r) => setTimeout(r, 100))
 
-    await new Promise((r) => {
-      setTimeout(r, 100)
-    })
+    // Why: routing goes through the manager's spawnAgentTerminal, not the legacy createTerminal path.
+    expect(runtime.spawnAgentTerminal).toHaveBeenCalledWith(undefined, payload('codex'))
 
-    expect(runtime.createdTerminals.length).toBe(1)
-    expect(runtime.createdTerminalOptions[0]).not.toHaveProperty('presentation')
-
-    // Complete the task
-    insertWorkerDone(db, { taskId: task.id, from: runtime.createdTerminals[0] })
+    // Complete the task from the spawned handle
+    insertWorkerDone(db, { taskId: task.id, from: 'term_spawned' })
 
     const result = await runPromise
     expect(result.status).toBe('completed')
+    // Why: one-task-one-terminal teardown — the spawned worker is released on completion.
+    expect(runtime.closeTerminal).toHaveBeenCalledWith('term_spawned')
+  })
+
+  it('records the resolved agent when an assignee is known and dispatches via the manager', async () => {
+    db = new OrchestrationDb(':memory:')
+    const runtime = createMockRuntime()
+    const manager = new AgentWorkerManager(runtime, '/nonexistent-home')
+    vi.spyOn(manager, 'resolve').mockReturnValue(payload('gemini'))
+
+    const task = db.createTask({ spec: 'assignee: gemini\nwork' })
+
+    const coordinator = new Coordinator(db, runtime, {
+      spec: 'go',
+      coordinatorHandle: 'coord',
+      pollIntervalMs: 50,
+      agentWorkerManager: manager
+    })
+
+    const runPromise = coordinator.run()
+    await new Promise((r) => setTimeout(r, 100))
+
+    expect(db.getTask(task.id)?.resolved_agent).toBe('gemini')
+    expect(runtime.spawnAgentTerminal).toHaveBeenCalled()
+
+    insertWorkerDone(db, { taskId: task.id, from: 'term_spawned' })
+    const result = await runPromise
+    expect(result.status).toBe('completed')
+  })
+
+  it('fails a ready task fast when its assignee agent is unknown', async () => {
+    db = new OrchestrationDb(':memory:')
+    const runtime = createMockRuntime()
+    // Why: real home is unused; resolve genuinely returns null for an unregistered agent.
+    const manager = new AgentWorkerManager(runtime, '/nonexistent-home')
+
+    const task = db.createTask({ spec: 'assignee: no-such-agent\nwork' })
+
+    const coordinator = new Coordinator(db, runtime, {
+      spec: 'go',
+      coordinatorHandle: 'coord',
+      pollIntervalMs: 20,
+      agentWorkerManager: manager
+    })
+
+    const result = await coordinator.run()
+
+    expect(result.status).toBe('failed')
+    expect(result.failedTasks).toContain(task.id)
+    expect(db.getTask(task.id)?.status).toBe('failed')
+    // Why: dispatch_error captures why the assignee could not be routed.
+    expect(db.getTask(task.id)?.dispatch_error).toContain('no-such-agent')
+    expect(runtime.spawnAgentTerminal).not.toHaveBeenCalled()
   })
 
   it('handles escalation and circuit breaker', async () => {
@@ -287,7 +367,7 @@ describe('Coordinator', () => {
 
     const task = db.createTask({ spec: 'risky work' })
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50
@@ -323,7 +403,7 @@ describe('Coordinator', () => {
     }
 
     const task = db.createTask({ spec: 'cannot dispatch' })
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 10
@@ -343,7 +423,7 @@ describe('Coordinator', () => {
 
     const task = db.createTask({ spec: 'needs approval' })
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50
@@ -405,7 +485,7 @@ describe('Coordinator', () => {
 
     expect(t2.status).toBe('pending')
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50
@@ -455,7 +535,7 @@ describe('Coordinator', () => {
     const t2 = db.createTask({ spec: 'two' })
     const t3 = db.createTask({ spec: 'three' })
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50,
@@ -503,7 +583,7 @@ describe('Coordinator', () => {
       .run(iso(60 * 60 * 1000), iso(30 * 60 * 1000), ctx.id)
 
     const logs: string[] = []
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20,
@@ -531,7 +611,7 @@ describe('Coordinator', () => {
     const task = db.createTask({ spec: 'work' })
     const ctx = db.createDispatchContext(task.id, 'term_a')
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20
@@ -578,7 +658,7 @@ describe('Coordinator', () => {
       payload: JSON.stringify({ taskId: task.id, dispatchId: staleCtx.id })
     })
 
-    const staleCoordinator = new Coordinator(db, runtime, {
+    const staleCoordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20,
@@ -601,7 +681,7 @@ describe('Coordinator', () => {
       from: 'term_current',
       dispatchId: activeCtx.id
     })
-    const completionCoordinator = new Coordinator(db, runtime, {
+    const completionCoordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20
@@ -631,7 +711,7 @@ describe('Coordinator', () => {
       senderPaneKey: `tab_after:${leafId}`
     })
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 20,
@@ -650,7 +730,7 @@ describe('Coordinator', () => {
     const runtime = createMockRuntime()
     db.createTask({ spec: 'never finishes' })
 
-    const coordinator = new Coordinator(db, runtime, {
+    const coordinator = makeCoordinator(db, runtime, {
       spec: 'go',
       coordinatorHandle: 'coord',
       pollIntervalMs: 50
@@ -680,7 +760,7 @@ describe('Coordinator', () => {
 
       const task = db.createTask({ spec: 'do the work' })
 
-      const coordinator = new Coordinator(db, runtime, {
+      const coordinator = makeCoordinator(db, runtime, {
         spec: 'go',
         coordinatorHandle: 'coord',
         pollIntervalMs: 50,
@@ -716,7 +796,7 @@ describe('Coordinator', () => {
 
       const task = db.createTask({ spec: 'do the work' })
 
-      const coordinator = new Coordinator(db, runtime, {
+      const coordinator = makeCoordinator(db, runtime, {
         spec: 'go',
         coordinatorHandle: 'coord',
         pollIntervalMs: 50,
@@ -756,7 +836,7 @@ describe('Coordinator', () => {
 allow-stale-base: true`
       const task = db.createTask({ spec })
 
-      const coordinator = new Coordinator(db, runtime, {
+      const coordinator = makeCoordinator(db, runtime, {
         spec: 'go',
         coordinatorHandle: 'coord',
         pollIntervalMs: 50,
@@ -789,7 +869,7 @@ allow-stale-base: true`
 
       const task = db.createTask({ spec: 'do the work' })
 
-      const coordinator = new Coordinator(db, runtime, {
+      const coordinator = makeCoordinator(db, runtime, {
         spec: 'go',
         coordinatorHandle: 'coord',
         pollIntervalMs: 50,
@@ -818,7 +898,7 @@ allow-stale-base: true`
 
       const task = db.createTask({ spec: 'do the work' })
 
-      const coordinator = new Coordinator(db, runtime, {
+      const coordinator = makeCoordinator(db, runtime, {
         spec: 'go',
         coordinatorHandle: 'coord',
         pollIntervalMs: 50,
@@ -849,7 +929,7 @@ allow-stale-base: true`
 
       const task = db.createTask({ spec: 'do the work' })
 
-      const coordinator = new Coordinator(db, runtime, {
+      const coordinator = makeCoordinator(db, runtime, {
         spec: 'go',
         coordinatorHandle: 'coord',
         pollIntervalMs: 50,
