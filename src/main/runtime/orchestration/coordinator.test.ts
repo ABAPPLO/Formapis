@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OrchestrationDb } from './db'
 import { reconcileLifecycleMessage } from './lifecycle-reconciliation'
+import type { AgentLaunchPayload } from '../../../shared/agent-yaml'
 import {
   Coordinator,
   DISPATCH_STALE_THRESHOLD,
@@ -68,7 +69,12 @@ function createMockRuntime(): CoordinatorRuntime & {
     },
     getTerminalOrchestrationCliCommand() {
       return mock.cliCommand
-    }
+    },
+    spawnAgentTerminal: vi.fn(async (_w: string | undefined, _p: AgentLaunchPayload) => ({
+      handle: 'term_spawned',
+      worktreeId: 'wt_test'
+    })),
+    closeTerminal: vi.fn(async (_h: string) => {})
   }
   return mock
 }

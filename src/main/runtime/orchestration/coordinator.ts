@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Why: the coordinator keeps message processing, task dispatch, gate handling, escalation, and convergence checking in one class so the polling loop can make atomic decisions across all these concerns without split-brain behavior. */
 import type { OrchestrationDb } from './db'
 import type { MessageRow, TaskRow, CoordinatorStatus } from './types'
+import type { AgentLaunchPayload } from '../../../shared/agent-yaml'
 import { buildDispatchPreamble } from './preamble'
 import { reconcileLifecycleMessage } from './lifecycle-reconciliation'
 
@@ -33,6 +34,14 @@ export type CoordinatorRuntime = {
   // Why: Formapis scenario tasks encode an intended agent (assignee) in the spec header;
   // this lets the coordinator route a task to a terminal already running that agent.
   getTerminalAgentType?(handle: string): string | null
+  // Why: spawn a terminal running the resolved agent-yaml payload (provider + tools
+  // + system_prompt) via the same path as Phase-2 try-run — not a raw shell command.
+  spawnAgentTerminal(
+    worktreeSelector: string | undefined,
+    payload: AgentLaunchPayload
+  ): Promise<{ handle: string; worktreeId: string }>
+  // Why: one-task-one-terminal teardown — close the worker terminal when its task ends.
+  closeTerminal(handle: string): Promise<void>
 }
 
 // Why (§3.1): 20 lets normal monorepo day-velocity pass but trips the 168-commit harm from ORCHESTRATOR_FEEDBACK.md (chosen in msg_eff3a646110d).
