@@ -83,8 +83,8 @@ function exposeMessageListTimestamps(messages: MessageRow[]): MessageRow[] {
   return messages.map(exposeMessageTimestamps)
 }
 
-// Schema versions: v2 'heartbeat'+last_heartbeat_at, v3 delivered_at, v4 task-creator terminal, v5 task_title/display_name, v6 pane-identity columns.
-const SCHEMA_VERSION = 6
+// Schema versions: v2 'heartbeat'+last_heartbeat_at, v3 delivered_at, v4 task-creator terminal, v5 task_title/display_name, v6 pane-identity columns, v7 tasks.resolved_agent/dispatch_error.
+const SCHEMA_VERSION = 7
 
 export class OrchestrationDb {
   private db: Database.Database
@@ -149,7 +149,9 @@ export class OrchestrationDb {
         deps          TEXT NOT NULL DEFAULT '[]',
         result        TEXT,
         created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-        completed_at  TEXT
+        completed_at  TEXT,
+        resolved_agent TEXT,
+        dispatch_error TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -285,6 +287,15 @@ export class OrchestrationDb {
         }
         if (!this.hasColumn('messages', 'sender_pane_key')) {
           this.db.exec(`ALTER TABLE messages ADD COLUMN sender_pane_key TEXT`)
+        }
+      }
+      // v6 → v7: assignee-routing audit columns on tasks (NULL ⇒ not yet resolved / no error).
+      if (current < 7) {
+        if (!this.hasColumn('tasks', 'resolved_agent')) {
+          this.db.exec(`ALTER TABLE tasks ADD COLUMN resolved_agent TEXT`)
+        }
+        if (!this.hasColumn('tasks', 'dispatch_error')) {
+          this.db.exec(`ALTER TABLE tasks ADD COLUMN dispatch_error TEXT`)
         }
       }
       this.createUndeliveredInboxIndexIfPossible()
@@ -616,6 +627,14 @@ export class OrchestrationDb {
     }
 
     return this.getTask(id)
+  }
+
+  recordTaskResolvedAgent(taskId: string, agentName: string): void {
+    this.db.prepare('UPDATE tasks SET resolved_agent = ? WHERE id = ?').run(agentName, taskId)
+  }
+
+  recordTaskDispatchError(taskId: string, message: string): void {
+    this.db.prepare('UPDATE tasks SET dispatch_error = ? WHERE id = ?').run(message, taskId)
   }
 
   // Why: runs in the status-update transaction, so a completed task never leaves its ready children unpromoted.

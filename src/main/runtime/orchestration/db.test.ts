@@ -317,6 +317,16 @@ describe('OrchestrationDb', () => {
       const child = d.createTask({ spec: 'child', parentId: parent.id })
       expect(child.parent_id).toBe(parent.id)
     })
+
+    it('records resolved agent and dispatch error on a task', () => {
+      const d = createDb()
+      const { id } = d.createTask({ spec: 's' })
+      d.recordTaskResolvedAgent(id, 'code-reviewer')
+      d.recordTaskDispatchError(id, 'failed to spawn')
+      const t = d.getTask(id)!
+      expect(t.resolved_agent).toBe('code-reviewer')
+      expect(t.dispatch_error).toBe('failed to spawn')
+    })
   })
 
   describe('dispatch contexts', () => {
@@ -686,25 +696,10 @@ describe('OrchestrationDb', () => {
 
       // Backdate dispatched_at for a, b, d to long ago so the grace doesn't
       // shield them. c keeps its default (≈now).
-      const sqlite = (d as unknown as { db: Database.Database }).db
-      sqlite
-        .prepare(
-          'UPDATE dispatch_contexts SET dispatched_at = ?, last_heartbeat_at = ? WHERE id = ?'
-        )
-        .run(iso(60 * 60 * 1000), iso(5 * 60 * 1000), ctxA.id)
-      sqlite
-        .prepare(
-          'UPDATE dispatch_contexts SET dispatched_at = ?, last_heartbeat_at = ? WHERE id = ?'
-        )
-        .run(iso(60 * 60 * 1000), iso(12 * 60 * 1000), ctxB.id)
-      sqlite
-        .prepare('UPDATE dispatch_contexts SET dispatched_at = ? WHERE id = ?')
-        .run(iso(30_000), ctxC.id)
-      sqlite
-        .prepare(
-          'UPDATE dispatch_contexts SET dispatched_at = ?, last_heartbeat_at = ? WHERE id = ?'
-        )
-        .run(iso(60 * 60 * 1000), iso(30 * 60 * 1000), ctxD.id)
+      setDispatchTimes(d, ctxA.id, iso(60 * 60 * 1000), iso(5 * 60 * 1000))
+      setDispatchTimes(d, ctxB.id, iso(60 * 60 * 1000), iso(12 * 60 * 1000))
+      setDispatchTimes(d, ctxC.id, iso(30_000))
+      setDispatchTimes(d, ctxD.id, iso(60 * 60 * 1000), iso(30 * 60 * 1000))
 
       const stale = d.getStaleDispatches(iso(10 * 60 * 1000))
       expect(stale.map((s) => s.id)).toEqual([ctxB.id])

@@ -47,6 +47,8 @@ export type TaskRow = {
   result: string | null
   created_at: string
   completed_at: string | null
+  resolved_agent: string | null
+  dispatch_error: string | null
 }
 
 export type DispatchContextRow = {
