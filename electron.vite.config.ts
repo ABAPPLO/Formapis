@@ -252,6 +252,11 @@ export default defineConfig({
           popout: resolve('src/renderer/popout.html')
         }
       }
-    }
+    },
+    // Why: env-gated polling fallback for hosts whose inotify watch budget is
+    // too small for this source tree (ENOSPC crashes the dev server). Off by
+    // default; set FORMAPIS_POLL=1 to opt in.
+    server:
+      process.env.FORMAPIS_POLL === '1' ? { watch: { usePolling: true, interval: 500 } } : undefined
   }
 })
