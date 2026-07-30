@@ -41,7 +41,9 @@ export type CoordinatorRuntime = {
     payload: AgentLaunchPayload
   ): Promise<{ handle: string; worktreeId: string }>
   // Why: one-task-one-terminal teardown — close the worker terminal when its task ends.
-  closeTerminal(handle: string): Promise<void>
+  // `unknown` (not `void`) so the real runtime's richer close result satisfies the contract
+  // without a duplicate method; callers ignore the value (Task 2's manager awaits + catches).
+  closeTerminal(handle: string): Promise<unknown>
 }
 
 // Why (§3.1): 20 lets normal monorepo day-velocity pass but trips the 168-commit harm from ORCHESTRATOR_FEEDBACK.md (chosen in msg_eff3a646110d).

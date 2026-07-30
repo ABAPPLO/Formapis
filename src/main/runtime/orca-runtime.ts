@@ -13,6 +13,7 @@ import { extractOscTitleScanTail } from '../../shared/osc-title-scan-tail'
 import { extractLastOsc7Uri, extractOscScanTail } from '../daemon/osc7-uri-extraction'
 import { parseFileUriPathParts } from '../daemon/osc7-file-uri'
 import type { AgentStatus } from '../../shared/agent-detection'
+import type { AgentLaunchPayload } from '../../shared/agent-yaml'
 import type { TerminalOscLinkRange } from '../../shared/terminal-osc-link-ranges'
 import type { TerminalOscColorQueryReplyColors } from '../../shared/terminal-osc-color-reply'
 import {
@@ -22948,6 +22949,14 @@ export class OrcaRuntimeService {
       this.notifier?.closeTerminal(leaf.tabId, leaf.paneRuntimeId)
     }
     return { handle, tabId: leaf.tabId, ptyKilled }
+  }
+
+  // Why: temporary stub — Task 6 implements the real agent-yaml terminal spawn used by assignee routing.
+  async spawnAgentTerminal(
+    _worktreeSelector: string | undefined,
+    _payload: AgentLaunchPayload
+  ): Promise<{ handle: string; worktreeId: string }> {
+    throw new Error('spawnAgentTerminal: not yet implemented (Task 6)')
   }
 
   async closeTerminalTab(handle: string): Promise<RuntimeTerminalClose> {
