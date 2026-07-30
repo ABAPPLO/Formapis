@@ -65,6 +65,7 @@ export const SCENARIOS_METHODS: RpcMethod[] = [
     params: z.object({ name: z.string().min(1) }),
     handler: async (params, { runtime }) => {
       const db = runtime.getOrchestrationDb()
+      // Why: returned verbatim — the error variant carries unknownAssignees so the UI can map refusals back to nodes.
       return launchScenario({ name: params.name, db })
     }
   })

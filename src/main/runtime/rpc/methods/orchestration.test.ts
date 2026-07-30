@@ -1229,6 +1229,25 @@ describe('orchestration RPC methods', () => {
       expect(dispatched?.assignee_handle).toBe('term_worker')
       expect(dispatched?.dispatch_id).toBe(ctx.id)
     })
+
+    it('surfaces resolved_agent and dispatch_error for the task board', async () => {
+      setup()
+      const t1 = db.createTask({ spec: 'routed' })
+      db.recordTaskResolvedAgent(t1.id, 'gemini')
+      db.recordTaskDispatchError(t1.id, 'no-such-agent')
+      const t2 = db.createTask({ spec: 'clean' })
+
+      const result = (await call('orchestration.taskList', {})) as {
+        tasks: { id: string; resolved_agent: string | null; dispatch_error: string | null }[]
+      }
+
+      const routed = result.tasks.find((t) => t.id === t1.id)!
+      const clean = result.tasks.find((t) => t.id === t2.id)!
+      expect(routed.resolved_agent).toBe('gemini')
+      expect(routed.dispatch_error).toBe('no-such-agent')
+      expect(clean.resolved_agent).toBeNull()
+      expect(clean.dispatch_error).toBeNull()
+    })
   })
 
   describe('orchestration.taskList --brief', () => {

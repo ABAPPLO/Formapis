@@ -419,11 +419,13 @@ export const ORCHESTRATION_METHODS: RpcMethod[] = [
         ready: params.ready
       })
       const tasks = joined.map((row) => {
-        const { assignee_handle, dispatch_id, ...base } = row
+        const { assignee_handle, dispatch_id, resolved_agent, dispatch_error, ...base } = row
+        // Why: surface assignee-routing outcome so the task board can show the resolved agent / dispatch failure reason.
+        const task = { ...base, resolved_agent, dispatch_error }
         if (base.status === 'dispatched') {
-          return { ...base, assignee_handle, dispatch_id }
+          return { ...task, assignee_handle, dispatch_id }
         }
-        return base
+        return task
       })
       return {
         tasks: params.brief ? abbreviateOrchestrationTasks(tasks) : tasks,
