@@ -22951,12 +22951,24 @@ export class OrcaRuntimeService {
     return { handle, tabId: leaf.tabId, ptyKilled }
   }
 
-  // Why: temporary stub — Task 6 implements the real agent-yaml terminal spawn used by assignee routing.
   async spawnAgentTerminal(
-    _worktreeSelector: string | undefined,
-    _payload: AgentLaunchPayload
+    worktreeSelector: string | undefined,
+    payload: AgentLaunchPayload
   ): Promise<{ handle: string; worktreeId: string }> {
-    throw new Error('spawnAgentTerminal: not yet implemented (Task 6)')
+    if (!worktreeSelector) {
+      throw new Error('spawnAgentTerminal: worktreeSelector is required')
+    }
+    // Why: only declared TUI providers carry a CLI binding; reject up front instead of failing in a downstream shell spawn.
+    if (!isTuiAgent(payload.provider)) {
+      throw new Error(`spawnAgentTerminal: unsupported provider "${payload.provider}"`)
+    }
+    // Why: reuse launchAgentTerminal — the same main-side path the renderer's agents-yaml
+    // try-run bottoms out in (buildStartupForAgent → buildAgentStartupPlan), so the agent
+    // gets its real provider CLI + config. No parallel provider→CLI mapping.
+    return await this.launchAgentTerminal(worktreeSelector, {
+      agent: payload.provider,
+      prompt: payload.initialMessage || payload.systemPrompt
+    })
   }
 
   async closeTerminalTab(handle: string): Promise<RuntimeTerminalClose> {
