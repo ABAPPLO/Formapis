@@ -6,6 +6,7 @@ import {
   type ScenarioTask,
   type ScenarioYaml
 } from '../../shared/scenario-yaml'
+import { resolveAgentLaunch } from '../agents-yaml/runner'
 import { readScenarioYamlRaw } from './registry'
 
 /**
@@ -39,7 +40,7 @@ export type LaunchResult =
       taskIds: { scenarioTaskId: string; engineTaskId: string; assignee: string }[]
       mode: ScenarioYaml['spec']['mode']
     }
-  | { ok: false; error: string }
+  | { ok: false; error: string; unknownAssignees?: string[] }
 
 /** Resolve + validate a scenario by name, returning the parsed YAML or an error. */
 export function loadScenarioForLaunch(
@@ -85,6 +86,27 @@ export function launchScenario(args: {
     return { ok: false, error: loaded.error }
   }
   const scenario = loaded.scenario
+
+  // Why: refuse before any DB mutation so a bad launch leaves state untouched.
+  // Orchestrated only — autonomous delegates routing to the supervisor.
+  if (scenario.spec.mode === 'orchestrated') {
+    const unknown: string[] = []
+    const pushed = new Set<string>()
+    for (const t of scenario.spec.tasks!) {
+      const r = resolveAgentLaunch(t.assignee, homeDir)
+      if ('error' in r && !pushed.has(t.assignee)) {
+        pushed.add(t.assignee)
+        unknown.push(t.assignee)
+      }
+    }
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        error: `unknown agent(s): ${unknown.join(', ')}`,
+        unknownAssignees: unknown
+      }
+    }
+  }
 
   // Why: tasks have no run/cluster isolation (db.ts schema); each Scenario run
   // starts from a clean slate.
