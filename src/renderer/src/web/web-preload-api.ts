@@ -46,7 +46,6 @@ import type {
   ResourceKind
 } from '../../../shared/resources'
 import type { AgentLaunchPayload, AgentYamlRecord } from '../../../shared/agent-yaml'
-import type { WorkflowNodeYamlRecord } from '../../../shared/workflow-node-yaml'
 import type { ScenarioRecord } from '../../../shared/scenario-yaml'
 import type { SshConnectionState, SshTarget } from '../../../shared/ssh-types'
 import {
@@ -794,7 +793,6 @@ function createWebPreloadApi(): Partial<PreloadApi> {
     skills: createSkillsApi(),
     resources: createResourcesApi(),
     agentsYaml: createAgentsYamlApi(),
-    workflowNodesYaml: createWorkflowNodesYamlApi(),
     scenarios: createScenariosApi(),
     pty: createPtyApi(),
     ssh: createSshApi(),
@@ -2891,25 +2889,6 @@ function createAgentsYamlApi(): NonNullable<Partial<PreloadApi>['agentsYaml']> {
           }
         | { ok: false; error: string }
       >('agents-yaml.generateFromDescription', { description }, 35_000)
-  }
-}
-
-function createWorkflowNodesYamlApi(): NonNullable<Partial<PreloadApi>['workflowNodesYaml']> {
-  return {
-    list: () => callRuntimeResult<WorkflowNodeYamlRecord[]>('workflow-nodes-yaml.list', {}, 15_000),
-    read: (name) => callRuntimeResult<string | null>('workflow-nodes-yaml.read', { name }, 15_000),
-    create: (input) =>
-      callRuntimeResult<WorkflowNodeYamlRecord>('workflow-nodes-yaml.create', input, 15_000),
-    save: (name, rawYaml) =>
-      callRuntimeResult<{ record: WorkflowNodeYamlRecord; valid: boolean; errors: string[] }>(
-        'workflow-nodes-yaml.save',
-        { name, rawYaml },
-        15_000
-      ),
-    remove: (name) =>
-      callRuntimeResult<{ ok: boolean }>('workflow-nodes-yaml.remove', { name }, 15_000).then(
-        () => undefined
-      )
   }
 }
 

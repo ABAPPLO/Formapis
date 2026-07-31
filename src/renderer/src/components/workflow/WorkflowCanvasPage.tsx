@@ -62,7 +62,7 @@ import {
 import type { ScenarioRecord, ScenarioTask, ScenarioYaml } from '../../../../shared/scenario-yaml'
 import { TaskNode, type TaskNodeData } from './TaskNode'
 import { layoutDag } from './layout'
-import { WorkflowNodesEditorSheet } from '../workflow-nodes-yaml/WorkflowNodesEditorSheet'
+import { AddAgentNodePanel } from './AddAgentNodePanel'
 import { WorkbenchShell } from '../workbench/WorkbenchShell'
 import { taskStatusStyle } from '../workbench/task-status-style'
 import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
@@ -469,7 +469,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
         return
       }
       try {
-        const yaml = await window.api.workflowNodesYaml.read(assignee)
+        const yaml = await window.api.agentsYaml.read(assignee)
         if (mountedRef.current) {
           setNodeTemplateYaml(yaml && yaml.trim() ? yaml : null)
         }
@@ -500,32 +500,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
   )
 
   // Compose: append a node from a Workflow Node template.
-  const addDraftNode = useCallback(
-    (record: { name: string; displayName: string; description?: string }) => {
-      setDraftNodes((nds) => {
-        const id = `${record.name}-${nds.length + 1}`
-        const position = {
-          x: 80 + (nds.length % 5) * 240,
-          y: 60 + Math.floor(nds.length / 5) * 120
-        }
-        const node: DraftNode = {
-          id,
-          type: 'taskNode',
-          position,
-          data: {
-            label: record.displayName || record.name,
-            assignee: record.name,
-            status: 'ready',
-            specSummary: record.description ?? ''
-          }
-        }
-        return [...nds, node]
-      })
-      setCanvasMode('compose')
-      toast.success(`Added "${record.displayName || record.name}" to canvas`)
-    },
-    [setDraftNodes]
-  )
 
   // Canvas interactions (compose): instance ref + context menu.
   const rfRef = useRef<ReactFlowInstance | null>(null)
@@ -592,6 +566,31 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
       setSidePanel('task')
     },
     [setDraftNodes]
+  )
+
+  // Why: "Nodes" panel = agents; clicking an agent drops a task node bound to it.
+  const addAgentNode = useCallback(
+    (agentName: string) => {
+      const center = rfRef.current?.screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2
+      })
+      const offset = (draftNodes.length % 6) * 28
+      const id = `node-${Date.now()}`
+      setDraftNodes((nds) => [
+        ...nds.map((n) => ({ ...n, selected: false })),
+        {
+          id,
+          type: 'taskNode',
+          position: { x: (center?.x ?? 160) + offset, y: (center?.y ?? 120) + offset },
+          data: { label: agentName, assignee: agentName, status: 'ready', specSummary: '' },
+          selected: true
+        }
+      ])
+      setSelectedTask({ id, task_title: agentName, spec: '', status: 'pending', deps: '[]' })
+      setSidePanel('task')
+    },
+    [draftNodes.length]
   )
 
   const duplicateDraftNode = useCallback(
@@ -955,13 +954,13 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
                   setNodeTemplateYaml(undefined)
                   setSidePanel('nodes')
                 }}
-                aria-label="Task templates"
+                aria-label="Workflow nodes"
               >
                 <Blocks className="size-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={4}>
-              Task templates
+              Nodes
             </TooltipContent>
           </Tooltip>
           <Tooltip>
@@ -1257,7 +1256,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             side="right"
             className={cn(
               'flex flex-col gap-0 p-0',
-              sidePanel === 'nodes' ? 'sm:max-w-[720px]' : 'sm:max-w-[420px]'
+              sidePanel === 'nodes' ? 'sm:max-w-[360px]' : 'sm:max-w-[420px]'
             )}
           >
             <SheetHeader className="flex flex-row items-center justify-between space-y-0 border-b px-4 py-2.5">
@@ -1301,14 +1300,7 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
                   />
                 )
               ) : null}
-              {sidePanel === 'nodes' ? (
-                <WorkflowNodesEditorSheet
-                  open
-                  composeMode={isCompose}
-                  onDraftAdd={addDraftNode}
-                  onAddedToCanvas={() => void pollTasks()}
-                />
-              ) : null}
+              {sidePanel === 'nodes' ? <AddAgentNodePanel onAdd={addAgentNode} /> : null}
             </div>
           </SheetContent>
         </Sheet>
