@@ -92,9 +92,13 @@ export function launchScenario(args: {
   if (scenario.spec.mode === 'orchestrated') {
     const unknown: string[] = []
     const pushed = new Set<string>()
+    // Why: cache the disk-read+parse per unique assignee so N tasks on the same agent resolve once.
+    const resolved = new Map<string, boolean>()
     for (const t of scenario.spec.tasks!) {
-      const r = resolveAgentLaunch(t.assignee, homeDir)
-      if ('error' in r && !pushed.has(t.assignee)) {
+      if (!resolved.has(t.assignee)) {
+        resolved.set(t.assignee, 'payload' in resolveAgentLaunch(t.assignee, homeDir))
+      }
+      if (!resolved.get(t.assignee) && !pushed.has(t.assignee)) {
         pushed.add(t.assignee)
         unknown.push(t.assignee)
       }
