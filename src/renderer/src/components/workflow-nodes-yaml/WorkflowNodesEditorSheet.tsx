@@ -18,6 +18,7 @@ import { CreateNodeDialog } from './CreateNodeDialog'
 import { WorkflowNodeCard } from './WorkflowNodeCard'
 import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
 import { YamlEditor } from '../workbench/YamlEditor'
+import { AgentPicker } from '../workbench/AgentPicker'
 import type { WorkflowNodeYamlRecord } from '../../../../shared/workflow-node-yaml'
 
 const STARTER_YAML = `apiVersion: formapis/v1
@@ -157,6 +158,9 @@ export function WorkflowNodesEditorSheet({
     }
   }
 
+  // Why: bind the node to a real registered agent when pushing it to the (monitor) canvas.
+  const [addAgent, setAddAgent] = useState('')
+
   // Push this node into the running workflow DAG as a new task; the canvas
   // polls orchestration.taskList, and onAddedToCanvas lets it refresh at once.
   const handleAddToCanvas = async (): Promise<void> => {
@@ -175,9 +179,13 @@ export function WorkflowNodesEditorSheet({
       })
       return
     }
+    if (!addAgent) {
+      toast.error('Select an agent to bind to this node')
+      return
+    }
     try {
       const target = getActiveRuntimeTarget(settings)
-      const spec = `assignee: ${node.name}\n${node.role}`
+      const spec = `assignee: ${addAgent}\n${node.role}`
       await callRuntimeRpc(target, 'orchestration.taskCreate', {
         spec,
         taskTitle: node.displayName,
@@ -254,6 +262,9 @@ export function WorkflowNodesEditorSheet({
                 <span className="truncate font-medium">{selectedNode.displayName}</span>
                 <code className="truncate text-xs text-muted-foreground">{selectedNode.name}</code>
                 <div className="ml-auto flex items-center gap-1">
+                  {!composeMode ? (
+                    <AgentPicker value={addAgent} onChange={setAddAgent} className="w-40" />
+                  ) : null}
                   <Button size="sm" variant="outline" onClick={() => void handleAddToCanvas()}>
                     <SquareArrowOutUpRight className="mr-1.5 size-3.5" />
                     Add to canvas
