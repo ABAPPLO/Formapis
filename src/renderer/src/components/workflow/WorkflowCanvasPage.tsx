@@ -67,6 +67,7 @@ import { WorkbenchShell } from '../workbench/WorkbenchShell'
 import { taskStatusStyle } from '../workbench/task-status-style'
 import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
 import { YamlEditor } from '../workbench/YamlEditor'
+import { AgentPicker } from '../workbench/AgentPicker'
 
 const POLL_INTERVAL_MS = 2000
 const DRAFT_STORAGE_KEY = 'formapis:draft-workflow'
@@ -1459,10 +1460,10 @@ function ComposeNodeEditor({
           <Input value={data.label} onChange={(e) => onUpdate({ label: e.target.value })} />
         </div>
         <div className="grid gap-1.5">
-          <Label className="text-xs text-muted-foreground">Assignee (workflow node)</Label>
-          <Input
+          <Label className="text-xs text-muted-foreground">Assignee (agent)</Label>
+          <AgentPicker
             value={data.assignee === 'unknown' ? '' : data.assignee}
-            onChange={(e) => onUpdate({ assignee: e.target.value || 'unknown' })}
+            onChange={(name) => onUpdate({ assignee: name })}
           />
         </div>
         <div className="grid gap-1.5">
