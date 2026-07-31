@@ -693,23 +693,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
     [setDraftNodes, setDraftEdges]
   )
 
-  // Why: toolbar "+" creates a node (node-canvas convention); cascade offsets repeated clicks.
-  const handleAddNode = useCallback(() => {
-    if (canvasMode !== 'compose') {
-      setCanvasMode('compose')
-      setRunning(false)
-    }
-    const center = rfRef.current?.screenToFlowPosition({
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2
-    })
-    const offset = (draftNodes.length % 6) * 28
-    addDraftNodeAt({
-      x: (center?.x ?? 160) + offset,
-      y: (center?.y ?? 120) + offset
-    })
-  }, [canvasMode, draftNodes.length, addDraftNodeAt])
-
   // Monitor-mode graph: derived from polled tasks (read-only, dagre layout).
   const monitorGraph = useMemo(() => {
     const taskById = new Map<string, OrchestrationTask>()
@@ -993,16 +976,6 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={4}>
               History ({history.length})
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button size="icon-sm" variant="ghost" onClick={handleAddNode} aria-label="Add node">
-                <Plus className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top" sideOffset={4}>
-              Add node
             </TooltipContent>
           </Tooltip>
           <input
