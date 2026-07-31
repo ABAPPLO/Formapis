@@ -955,13 +955,13 @@ export default function WorkflowCanvasPage(): React.JSX.Element {
                   setNodeTemplateYaml(undefined)
                   setSidePanel('nodes')
                 }}
-                aria-label="Workflow nodes"
+                aria-label="Task templates"
               >
                 <Blocks className="size-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={4}>
-              Nodes
+              Task templates
             </TooltipContent>
           </Tooltip>
           <Tooltip>

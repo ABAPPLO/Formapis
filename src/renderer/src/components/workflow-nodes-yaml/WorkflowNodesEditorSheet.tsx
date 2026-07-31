@@ -215,12 +215,16 @@ export function WorkflowNodesEditorSheet({
     () => nodes.find((n) => n.name === selectedName) ?? null,
     [nodes, selectedName]
   )
+  // Why: preselect the node's suggested agent (if any) so the picker starts from a sensible default.
+  useEffect(() => {
+    setAddAgent(selectedNode?.suggestedAgent ?? '')
+  }, [selectedNode])
 
   return (
     <div className="flex h-full w-full flex-col">
       <div className="flex items-center gap-2 px-4 py-2">
         <span className="text-xs text-muted-foreground">
-          {nodes.length} node{nodes.length === 1 ? '' : 's'}
+          {nodes.length} template{nodes.length === 1 ? '' : 's'}
         </span>
         <Button variant="outline" size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
           <Plus className="mr-1.5 size-3.5" />

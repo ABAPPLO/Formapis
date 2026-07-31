@@ -61,7 +61,7 @@ export function CreateNodeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>New workflow node</DialogTitle>
+          <DialogTitle>New task template</DialogTitle>
           <DialogDescription>
             Define a reusable task template. Bind an agent when adding it to the canvas.
           </DialogDescription>
