@@ -31,14 +31,9 @@ export function WorkflowNodeCard({
         )}
       </div>
       <div className="flex flex-wrap items-center gap-1">
-        {node.toolsMcp.length > 0 ? (
+        {node.suggestedAgent ? (
           <Badge variant="outline" className="text-[10px]">
-            {node.toolsMcp.length} MCP
-          </Badge>
-        ) : null}
-        {node.toolsSkills.length > 0 ? (
-          <Badge variant="outline" className="text-[10px]">
-            {node.toolsSkills.length} skill
+            → {node.suggestedAgent}
           </Badge>
         ) : null}
         {node.inputs.length > 0 ? (

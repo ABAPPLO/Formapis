@@ -185,7 +185,7 @@ export function WorkflowNodesEditorSheet({
     }
     try {
       const target = getActiveRuntimeTarget(settings)
-      const spec = `assignee: ${addAgent}\n${node.role}`
+      const spec = `assignee: ${addAgent}\n${node.task}`
       await callRuntimeRpc(target, 'orchestration.taskCreate', {
         spec,
         taskTitle: node.displayName,

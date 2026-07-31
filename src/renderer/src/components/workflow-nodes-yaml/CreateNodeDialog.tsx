@@ -26,13 +26,13 @@ export function CreateNodeDialog({
   const [name, setName] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [description, setDescription] = useState('')
-  const [role, setRole] = useState('')
+  const [task, setTask] = useState('')
   const [busy, setBusy] = useState(false)
   const reset = (): void => {
     setName('')
     setDisplayName('')
     setDescription('')
-    setRole('')
+    setTask('')
   }
   const submit = async (): Promise<void> => {
     if (!name.trim()) {
@@ -45,7 +45,7 @@ export function CreateNodeDialog({
         name: name.trim(),
         displayName: displayName.trim() || undefined,
         description: description.trim() || undefined,
-        role: role.trim() || 'You are a workflow node.'
+        task: task.trim() || 'Describe what this task should do.'
       })
       toast.success(`Created node "${record.name}"`)
       reset()
@@ -63,7 +63,7 @@ export function CreateNodeDialog({
         <DialogHeader>
           <DialogTitle>New workflow node</DialogTitle>
           <DialogDescription>
-            Define a reusable node template (role + tools). You can edit the full YAML afterward.
+            Define a reusable task template. Bind an agent when adding it to the canvas.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
@@ -96,12 +96,12 @@ export function CreateNodeDialog({
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="node-role">Role (one line)</Label>
+            <Label htmlFor="node-task">Task (what to do)</Label>
             <Input
-              id="node-role"
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              placeholder="You are a strict code reviewer."
+              id="node-task"
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              placeholder="Review the PR for quality and security."
             />
           </div>
         </div>

@@ -37,14 +37,14 @@ export function registerWorkflowNodeYamlHandlers(): void {
         name: string
         displayName?: string
         description?: string
-        role: string
+        task: string
       }
     ): Promise<WorkflowNodeYamlRecord> => {
       return createWorkflowNodeYaml({
         name: input.name,
         displayName: input.displayName,
         description: input.description,
-        role: input.role
+        task: input.task
       })
     }
   )

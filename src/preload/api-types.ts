@@ -2393,7 +2393,7 @@ export type PreloadApi = {
       name: string
       displayName?: string
       description?: string
-      role: string
+      task: string
     }) => Promise<WorkflowNodeYamlRecord>
     save: (
       name: string,

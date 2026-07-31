@@ -89,10 +89,8 @@ function readWorkflowNodeYamlFile(filePath: string): WorkflowNodeYamlRecord | nu
     displayName: fallbackName,
     description: '',
     version: '',
-    role: '',
-    toolsMcp: [],
-    toolsSkills: [],
-    toolsPlugins: [],
+    task: '',
+    suggestedAgent: null,
     inputs: [],
     outputs: [],
     filePath,
@@ -116,10 +114,8 @@ function recordFromNode(
     displayName: node.metadata.display_name ?? node.metadata.name,
     description: node.metadata.description ?? '',
     version: node.metadata.version ?? '',
-    role: node.spec.role,
-    toolsMcp: node.spec.tools?.mcp ?? [],
-    toolsSkills: node.spec.tools?.skills ?? [],
-    toolsPlugins: node.spec.tools?.plugins ?? [],
+    task: node.spec.task,
+    suggestedAgent: node.spec.suggested_agent ?? null,
     inputs: node.spec.inputs ?? [],
     outputs: node.spec.outputs ?? [],
     filePath,
@@ -158,10 +154,8 @@ export function saveWorkflowNodeYaml(
           displayName: targetName,
           description: '',
           version: '',
-          role: '',
-          toolsMcp: [],
-          toolsSkills: [],
-          toolsPlugins: [],
+          task: '',
+          suggestedAgent: null,
           inputs: [],
           outputs: [],
           filePath,
@@ -179,7 +173,7 @@ export function createWorkflowNodeYaml(
     name: string
     displayName?: string
     description?: string
-    role: string
+    task: string
   },
   homeDir: string = homedir()
 ): WorkflowNodeYamlRecord {
@@ -192,7 +186,7 @@ export function createWorkflowNodeYaml(
       description: input.description
     },
     spec: {
-      role: input.role
+      task: input.task
     }
   }
   const raw = serializeWorkflowNodeYaml(node)

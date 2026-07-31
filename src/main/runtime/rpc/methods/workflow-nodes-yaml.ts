@@ -29,14 +29,14 @@ export const WORKFLOW_NODE_YAML_METHODS: RpcMethod[] = [
       name: z.string().min(1),
       displayName: z.string().optional(),
       description: z.string().optional(),
-      role: z.string()
+      task: z.string()
     }),
     handler: async (params) =>
       createWorkflowNodeYaml({
         name: params.name,
         displayName: params.displayName,
         description: params.description,
-        role: params.role
+        task: params.task
       })
   }),
   defineMethod({

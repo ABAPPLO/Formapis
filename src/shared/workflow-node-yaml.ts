@@ -50,14 +50,9 @@ export const WorkflowNodeYamlSchema = z.object({
     version: z.string().optional()
   }),
   spec: z.object({
-    role: z.string(),
-    tools: z
-      .object({
-        mcp: z.array(z.string()).optional(),
-        skills: z.array(z.string()).optional(),
-        plugins: z.array(z.string()).optional()
-      })
-      .optional(),
+    // Why: the task spec/prompt template (was `role`); role/tools now belong to the agent this node is bound to at instantiation.
+    task: z.string().min(1),
+    suggested_agent: kebabName.optional(),
     inputs: z.array(z.string()).optional(),
     outputs: z.array(z.string()).optional(),
     behavior: z
@@ -85,10 +80,8 @@ export type WorkflowNodeYamlRecord = {
   displayName: string
   description: string
   version: string
-  role: string
-  toolsMcp: string[]
-  toolsSkills: string[]
-  toolsPlugins: string[]
+  task: string
+  suggestedAgent: string | null
   inputs: string[]
   outputs: string[]
   filePath: string
@@ -121,12 +114,9 @@ export function serializeWorkflowNodeYaml(node: WorkflowNodeYaml): string {
     lines.push(`  version: ${node.metadata.version}`)
   }
   lines.push('spec:')
-  lines.push(`  role: ${yamlBlockOrScalar(node.spec.role)}`)
-  if (node.spec.tools) {
-    lines.push('  tools:')
-    emitStringList(lines, '    mcp', node.spec.tools.mcp)
-    emitStringList(lines, '    skills', node.spec.tools.skills)
-    emitStringList(lines, '    plugins', node.spec.tools.plugins)
+  lines.push(`  task: ${yamlBlockOrScalar(node.spec.task)}`)
+  if (node.spec.suggested_agent) {
+    lines.push(`  suggested_agent: ${node.spec.suggested_agent}`)
   }
   emitStringList(lines, '  inputs', node.spec.inputs)
   emitStringList(lines, '  outputs', node.spec.outputs)
@@ -160,6 +150,8 @@ export function parseWorkflowNodeYaml(text: string): WorkflowNodeYamlValidation 
       errors: [`YAML parse error: ${error instanceof Error ? error.message : String(error)}`]
     }
   }
+  // Why: legacy nodes used spec.role (+ spec.tools); migrate before validation.
+  normalizeLegacyNode(parsed)
   const result = WorkflowNodeYamlSchema.safeParse(parsed)
   if (result.success) {
     return { valid: true, errors: [], node: result.data }
@@ -168,6 +160,24 @@ export function parseWorkflowNodeYaml(text: string): WorkflowNodeYamlValidation 
     valid: false,
     errors: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
   }
+}
+
+function normalizeLegacyNode(parsed: unknown): void {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return
+  }
+  const node = parsed as Record<string, unknown>
+  const spec = node.spec
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    return
+  }
+  const s = spec as Record<string, unknown>
+  // Why: legacy nodes used spec.role (+ tools); migrate role→task, drop tools (role/tools now live on the bound agent).
+  if (s.task === undefined && typeof s.role === 'string') {
+    s.task = s.role
+  }
+  delete s.role
+  delete s.tools
 }
 
 function yamlScalar(value: string): string {

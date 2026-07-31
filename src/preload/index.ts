@@ -2340,7 +2340,7 @@ const api = {
       name: string
       displayName?: string
       description?: string
-      role: string
+      task: string
     }): Promise<WorkflowNodeYamlRecord> => ipcRenderer.invoke('workflow-nodes-yaml:create', input),
     save: (
       name: string,
