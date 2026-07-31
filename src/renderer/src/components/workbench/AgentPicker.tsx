@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { AgentRuntimeProviderSchema } from '../../../../shared/agent-yaml'
 
 // Why: single source of truth — every "assignee" picks from the agents-yaml
 // registry, never free text. The inline ＋ creates a new agent in that same
@@ -120,11 +121,18 @@ export function AgentPicker({
             </div>
             <div className="grid gap-1">
               <Label className="text-xs text-muted-foreground">Provider</Label>
-              <Input
-                value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-                placeholder="claude"
-              />
+              <Select value={provider} onValueChange={setProvider}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  {AgentRuntimeProviderSchema.options.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid gap-1">
               <Label className="text-xs text-muted-foreground">Role</Label>

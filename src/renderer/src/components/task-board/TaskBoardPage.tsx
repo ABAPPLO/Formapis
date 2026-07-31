@@ -11,6 +11,7 @@ import {
   Square
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { toastLaunchFailure } from '../workbench/scenario-launch-toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -137,7 +138,7 @@ export default function TaskBoardPage(): React.JSX.Element {
     try {
       const result = await window.api.scenarios.launch(selectedName)
       if (!result.ok) {
-        toast.error('Launch failed', { description: result.error })
+        toastLaunchFailure(result)
         return
       }
       toast.success(

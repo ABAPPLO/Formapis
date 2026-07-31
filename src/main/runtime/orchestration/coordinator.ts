@@ -417,8 +417,13 @@ export class Coordinator {
         this.acquiredHandles.add(acquired.handle)
         this.db.recordTaskResolvedAgent(task.id, acquired.agentName)
       } else if (assignee && acquired && !acquired.ok) {
-        this.db.recordTaskDispatchError(task.id, acquired.message)
-        this.db.updateTaskStatus(task.id, 'failed')
+        if (acquired.reason === 'unknown_agent') {
+          // Why: unknown agent is permanent — fail fast so the user registers it before retry.
+          this.db.recordTaskDispatchError(task.id, acquired.message)
+          this.db.updateTaskStatus(task.id, 'failed')
+        }
+        // Why: spawn_failed is transient (momentary PTY/resource) — leave the task 'ready'
+        // to retry next tick instead of permanently failing it (restores pre-routing behavior).
         this.opts.onLog(`Task ${task.id} dispatch failed: ${acquired.message}`)
         continue
       } else if (terminals.length > 0) {
@@ -479,48 +484,57 @@ export class Coordinator {
       }
     }
 
-    const dispatch = this.db.createDispatchContext(
-      task.id,
-      targetHandle,
-      this.runtime.getTerminalPaneKey?.(targetHandle) ?? undefined
-    )
-
-    // Why: dispatched agents use orca-dev in dev mode to reach the dev runtime's socket, not production (Section 6.4).
-    const preamble = buildDispatchPreamble({
-      taskId: task.id,
-      dispatchId: dispatch.id,
-      // Why (§3.4): strippedSpec drops the allow-stale-base line so the worker doesn't read the infra flag as an instruction.
-      taskSpec: strippedSpec,
-      coordinatorHandle: this.opts.coordinatorHandle,
-      workerHandle: targetHandle,
-      devMode: process.env.ORCA_USER_DATA_PATH?.includes('orca-dev'),
-      ...(this.runtime.getTerminalOrchestrationCliCommand
-        ? { cliCommand: this.runtime.getTerminalOrchestrationCliCommand(targetHandle) }
-        : {}),
-      // Why (§3.2): pass baseDrift unconditionally — the preamble builder itself gates the drift section on behind > 0.
-      ...(baseDrift ? { baseDrift } : {})
-    })
-
-    // Why: surface a since-resolved decision gate's outcome to the worker via the preamble.
-    const gates = this.db.listGates({ taskId: task.id, status: 'resolved' })
-    let gateContext = ''
-    if (gates.length > 0) {
-      const latest = gates.at(-1)!
-      gateContext = `\n\n--- DECISION GATE RESOLVED ---\nQuestion: ${latest.question}\nResolution: ${latest.resolution}\n---\n`
-    }
-
+    // Why: wrap commit + send so ANY throw (dispatch context, preamble, gates, or the
+    // prompt itself) releases the spawned terminal — otherwise a pre-send throw leaks
+    // the live PTY (handle sits in acquiredHandles with no context to key cleanup on).
+    let dispatch: { id: string } | undefined
     try {
+      dispatch = this.db.createDispatchContext(
+        task.id,
+        targetHandle,
+        this.runtime.getTerminalPaneKey?.(targetHandle) ?? undefined
+      )
+
+      // Why: dispatched agents use orca-dev in dev mode to reach the dev runtime's socket, not production (Section 6.4).
+      const preamble = buildDispatchPreamble({
+        taskId: task.id,
+        dispatchId: dispatch.id,
+        // Why (§3.4): strippedSpec drops the allow-stale-base line so the worker doesn't read the infra flag as an instruction.
+        taskSpec: strippedSpec,
+        coordinatorHandle: this.opts.coordinatorHandle,
+        workerHandle: targetHandle,
+        devMode: process.env.ORCA_USER_DATA_PATH?.includes('orca-dev'),
+        ...(this.runtime.getTerminalOrchestrationCliCommand
+          ? { cliCommand: this.runtime.getTerminalOrchestrationCliCommand(targetHandle) }
+          : {}),
+        // Why (§3.2): pass baseDrift unconditionally — the preamble builder itself gates the drift section on behind > 0.
+        ...(baseDrift ? { baseDrift } : {})
+      })
+
+      // Why: surface a since-resolved decision gate's outcome to the worker via the preamble.
+      const gates = this.db.listGates({ taskId: task.id, status: 'resolved' })
+      const gateContext =
+        gates.length > 0
+          ? `\n\n--- DECISION GATE RESOLVED ---\nQuestion: ${gates.at(-1)!.question}\nResolution: ${gates.at(-1)!.resolution}\n---\n`
+          : ''
+
       await this.runtime.sendTerminalAgentPrompt(targetHandle, preamble + gateContext)
     } catch (err) {
-      const updated = this.db.failDispatch(
-        dispatch.id,
-        err instanceof Error ? err.message : String(err)
-      )
-      if (updated?.status === 'circuit_broken') {
-        this.state.failedTasks.push(task.id)
+      if (dispatch) {
+        const updated = this.db.failDispatch(
+          dispatch.id,
+          err instanceof Error ? err.message : String(err)
+        )
+        if (updated?.status === 'circuit_broken') {
+          this.state.failedTasks.push(task.id)
+        }
+        // Why: a committed dispatch that still threw (preamble/gate/send) — release via its context.
+        await this.releaseDispatchTerminal(dispatch.id)
+      } else if (this.acquiredHandles.has(targetHandle)) {
+        // Why: threw before any dispatch context existed — release the spawned terminal directly so it doesn't leak.
+        this.acquiredHandles.delete(targetHandle)
+        await this.opts.agentWorkerManager.release(targetHandle)
       }
-      // Why: release on every failDispatch — a retryable failure still ends this attempt's terminal; the retry acquires a fresh one (one-task-one-terminal).
-      await this.releaseDispatchTerminal(dispatch.id)
       throw err
     }
 

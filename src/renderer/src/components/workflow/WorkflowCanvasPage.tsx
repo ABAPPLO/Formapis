@@ -68,6 +68,7 @@ import { taskStatusStyle } from '../workbench/task-status-style'
 import { ConfirmDeleteDialog } from '../workbench/ConfirmDeleteDialog'
 import { YamlEditor } from '../workbench/YamlEditor'
 import { AgentPicker } from '../workbench/AgentPicker'
+import { toastLaunchFailure } from '../workbench/scenario-launch-toast'
 
 const POLL_INTERVAL_MS = 2000
 const DRAFT_STORAGE_KEY = 'formapis:draft-workflow'
@@ -1587,14 +1588,4 @@ function safeParseDeps(depsJson: string): string[] {
   return []
 }
 
-// Why: unknown-assignee refusal is actionable (register the agent first), so
-// surface it distinctly from a generic launch error.
-function toastLaunchFailure(result: { error: string; unknownAssignees?: string[] }): void {
-  if (result.unknownAssignees && result.unknownAssignees.length > 0) {
-    toast.error('Scenario not started', {
-      description: `Unknown agent(s): ${result.unknownAssignees.join(', ')}`
-    })
-  } else {
-    toast.error('Launch failed', { description: result.error })
-  }
-}
+// toastLaunchFailure now lives in ../workbench/scenario-launch-toast (shared with TaskBoardPage).
